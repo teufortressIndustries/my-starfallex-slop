@@ -1,4 +1,4 @@
---@name Prop Disguise
+--@name Prop Disguise (Stealth + Physics + Copy Properties)
 --@author John Doe
 --@shared
 
@@ -16,12 +16,18 @@ if SERVER then
     local physProp = nil
 
     local inPhysicsMode = false
+    local isDetached = false -- Track whether we are detached from the physical prop
     local wasReloading = false
     local wasRightClick = false
     local wasZooming = false 
+    local wasWalk = false
     local isFrozen = false
     local lastJump = 0
     local wasAlive = true 
+
+    -- Rotation Debounce states for Freeze Mode
+    local ROT_INCREMENT = 15
+    local wasW, wasS, wasA, wasD = false, false, false, false
 
     local FORCE_MULTIPLIER = 25
     local JUMP_MULTIPLIER = 250
@@ -93,6 +99,7 @@ if SERVER then
 
         physProp = nil
         isFrozen = false
+        isDetached = false
 
         if isValid(propHolo) then
             propHolo:setColor(currentColor) -- Revert to copied color instead of plain white
@@ -129,6 +136,9 @@ if SERVER then
 
     local function handlePhysicsMovement()
         if not isValid(physProp) then return end
+
+        -- If detached, completely skip player teleportation and rolling controls
+        if isDetached then return end
 
         local propPos = physProp:getPos()
         local propRadius = (physProp:obbMaxs().y * currentScale.y) + 16 
@@ -170,7 +180,45 @@ if SERVER then
 
         wasRightClick = rightClick
 
-        if isFrozen then return end
+        -- --- FREEZE MODE ROTATION LOGIC ---
+        if isFrozen then
+            local isW = ply:keyDown(8)    -- IN_FORWARD
+            local isS = ply:keyDown(16)   -- IN_BACK
+            local isA = ply:keyDown(512)  -- IN_MOVELEFT
+            local isD = ply:keyDown(1024) -- IN_MOVERIGHT
+
+            local currentAng = physProp:getAngles()
+            local updated = false
+
+            -- Pitch adjustments (W/S)
+            if isW and not wasW then
+                currentAng:rotateAroundAxis(physProp:getRight(), ROT_INCREMENT)
+                updated = true
+            elseif isS and not wasS then
+                currentAng:rotateAroundAxis(physProp:getRight(), -ROT_INCREMENT)
+                updated = true
+            end
+
+            -- Yaw adjustments (A/D)
+            if isA and not wasA then
+                currentAng:rotateAroundAxis(physProp:getUp(), ROT_INCREMENT)
+                updated = true
+            elseif isD and not wasD then
+                currentAng:rotateAroundAxis(physProp:getUp(), -ROT_INCREMENT)
+                updated = true
+            end
+
+            if updated then
+                physProp:setAngles(currentAng)
+            end
+
+            -- Store key states for edge-detection tracking
+            wasW, wasS, wasA, wasD = isW, isS, isA, isD
+            return 
+        end
+
+        -- Reset key tracking states when unfrozen
+        wasW, wasS, wasA, wasD = false, false, false, false
 
         local ang = ply:getEyeAngles()
         local fwd = ang:getForward()
@@ -265,6 +313,20 @@ if SERVER then
             end
         end
         wasReloading = isReloading
+
+        -- Detach feature toggled via WALK button (Only functions in Physics Mode)
+        if inPhysicsMode and isValid(physProp) then
+            local isWalk = ply:keyDown(IN_KEY.WALK)
+            if isWalk and not wasWalk then
+                isDetached = not isDetached
+                if isDetached then
+                    print("Detached from prop! You can move freely.")
+                else
+                    print("Attached back to prop!")
+                end
+            end
+            wasWalk = isWalk
+        end
 
         -- Copy Looked-at Prop Model & Properties (Zoom Key)
         local isZooming = ply:keyDown(IN_KEY.ZOOM)
