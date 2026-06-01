@@ -1,10 +1,16 @@
---@name Prop Disguise (Stealth + Physics)
---@author You
+--@name Prop Disguise (Stealth + Physics + Copy Properties)
+--@author John Doe
 --@shared
 
 if SERVER then
     local ply = owner()
-    local currentModel = "models/maxofs2d/hover_rings.mdl"
+    local currentModel = "models/props_junk/watermelon01.mdl"
+    
+    -- Variables to store target entity properties
+    local currentSkin = 0
+    local currentMaterial = ""
+    local currentColor = Color(255, 255, 255, 255)
+    local currentScale = Vector(1, 1, 1)
 
     local propHolo = holograms.create(ply:getPos(), ply:getAngles(), currentModel)
     local physProp = nil
@@ -12,7 +18,7 @@ if SERVER then
     local inPhysicsMode = false
     local wasReloading = false
     local wasRightClick = false
-    local wasZooming = false -- Track the Zoom key state
+    local wasZooming = false 
     local isFrozen = false
     local lastJump = 0
     local wasAlive = true 
@@ -24,31 +30,43 @@ if SERVER then
 
     ply:setModelScale(0)
 
-    -- Networking helper to keep the client HUD informed
-    local function syncState()
-        if not isValid(ply) then return end
-        net.start("prop_disguise_sync")
-        net.writeBool(inPhysicsMode)
-        net.writeBool(isFrozen)
-        net.writeString(currentModel)
-        net.send(ply)
+    -- Helper to apply look/feel properties to an object
+    local function applyVisualProperties(ent)
+        if not isValid(ent) then return end
+        ent:setSkin(currentSkin)
+        ent:setMaterial(currentMaterial)
+        
+        -- FORCE render mode 1 (TransColor) so the engine accepts custom colors and alphas
+        ent:setRenderMode(1) 
+        ent:setColor(Color(currentColor.r, currentColor.g, currentColor.b, currentColor.a))
+        
+        -- Correctly scale entities (Holograms accept setScale, Props prefer Matrices)
+        pcall(function()
+            if ent.setMatrix then
+                local mat = Matrix()
+                mat:scale(currentScale)
+                ent:setMatrix(mat)
+            elseif ent.setScale then
+                ent:setScale(currentScale)
+            end
+        end)
     end
 
-    -- Uses native engine parenting to eliminate Think loop tracking overhead
     local function updateHologram()
         if not isValid(propHolo) then return end
         
         propHolo:setParent(ply)
         propHolo:setLocalPos(Vector(0, 0, holoOffsetZ))
         propHolo:setLocalAngles(Angle(0, 0, 0))
+        applyVisualProperties(propHolo)
     end
 
-    -- Fixed typo and added a callback delay to allow engine model bounds to load
     local function updateHoloOffset(callback)
         timer.simple(0.05, function()
             if isValid(propHolo) and propHolo.obbMins then
                 local mins = propHolo:obbMins()
-                holoOffsetZ = -mins.z
+                -- Multiply offset by Z scale so larger scaled props match alignment
+                holoOffsetZ = -mins.z * currentScale.z
             end
             if callback then callback() end
         end)
@@ -57,7 +75,6 @@ if SERVER then
     timer.simple(0.1, function()
         updateHoloOffset(function()
             updateHologram()
-            syncState()
         end)
     end)
 
@@ -78,13 +95,13 @@ if SERVER then
         isFrozen = false
 
         if isValid(propHolo) then
-            propHolo:setColor(Color(255, 255, 255, 255))
+            propHolo:setColor(currentColor) -- Revert to copied color instead of plain white
         end
     end
 
     local function spawnProp()
         if isValid(propHolo) then
-            propHolo:setColor(Color(255, 255, 255, 0))
+            propHolo:setColor(Color(currentColor.r, currentColor.g, currentColor.b, 0))
         end
 
         pcall(function()
@@ -96,8 +113,12 @@ if SERVER then
 
             physProp:setOwner(ply)
 
-            timer.simple(0.05, function()
+            -- Wait an engine frame/tick so the physics prop initializes properly 
+            -- before overriding its materials, skins, and scale matrix.
+            timer.simple(0, function()
                 if not isValid(physProp) then return end
+                applyVisualProperties(physProp)
+                
                 local phys = physProp:getPhysicsObject()
                 if isValid(phys) then
                     phys:wake()
@@ -110,7 +131,7 @@ if SERVER then
         if not isValid(physProp) then return end
 
         local propPos = physProp:getPos()
-        local propRadius = physProp:obbMaxs().y + 16 
+        local propRadius = (physProp:obbMaxs().y * currentScale.y) + 16 
         
         local playerFacing = ply:getEyeAngles():getForward()
         playerFacing.z = 0
@@ -136,7 +157,6 @@ if SERVER then
 
         if rightClick and not wasRightClick then
             isFrozen = not isFrozen
-            syncState()
 
             if isFrozen then
                 phys:enableMotion(false)
@@ -198,7 +218,6 @@ if SERVER then
                 if isValid(propHolo) then
                     propHolo:setColor(Color(255, 255, 255, 0))
                 end
-                syncState()
             end
             return 
         else
@@ -208,15 +227,13 @@ if SERVER then
                 setPlayerHidden(true)
                 
                 if isValid(propHolo) then
-                    propHolo:setColor(Color(255, 255, 255, 255))
+                    propHolo:setColor(currentColor)
                     updateHoloOffset(function()
                         updateHologram()
                         print("Disguise Reactivated: Hologram Mode")
-                        syncState()
                     end)
                 else
                     print("Disguise Reactivated: Hologram Mode")
-                    syncState()
                 end
             end
         end
@@ -226,7 +243,6 @@ if SERVER then
             cleanupProp()
             updateHologram()
             print("Your physical disguise was DESTROYED! Reverting to Hologram Mode.")
-            syncState()
         end
 
         -- Mode Toggling (ALT1)
@@ -247,18 +263,33 @@ if SERVER then
                 updateHologram()
                 print("Switched to: Hologram Mode")
             end
-            syncState()
         end
         wasReloading = isReloading
 
-        -- Copy Looked-at Prop Model (Zoom Key)
+        -- Copy Looked-at Prop Model & Properties (Zoom Key)
         local isZooming = ply:keyDown(IN_KEY.ZOOM)
         if isZooming and not wasZooming then
             local tr = ply:getEyeTrace()
-            if isValid(tr.Entity) and not tr.Entity:isPlayer() then
-                local modelPath = tr.Entity:getModel()
+            local target = tr.Entity
+            if isValid(target) and not target:isPlayer() then
+                local modelPath = target:getModel()
                 if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
                     currentModel = modelPath
+                    
+                    -- Extract entity visual properties
+                    currentSkin = target:getSkin() or 0
+                    currentMaterial = target:getMaterial() or ""
+                    currentColor = target:getColor() or Color(255, 255, 255, 255)
+                    
+                    -- Handle custom manipulation vs default tracking properties
+                    if target.getScale then
+                        currentScale = target:getScale() or Vector(1,1,1)
+                    elseif target.getMatrix then
+                        local mat = target:getMatrix()
+                        currentScale = mat and mat:getScale() or Vector(1,1,1)
+                    else
+                        currentScale = Vector(1, 1, 1)
+                    end
 
                     if isValid(propHolo) then
                         propHolo:setModel(currentModel)
@@ -270,8 +301,7 @@ if SERVER then
                             cleanupProp()
                             spawnProp()
                         end
-                        print("Disguise updated via target: " .. currentModel)
-                        syncState()
+                        print("Disguise & properties updated via target!")
                     end)
                 end
             end
@@ -291,6 +321,11 @@ if SERVER then
 
             if modelPath and modelPath ~= "" then
                 currentModel = modelPath
+                -- Reset custom attributes for generic chat commands
+                currentSkin = 0
+                currentMaterial = ""
+                currentColor = Color(255, 255, 255, 255)
+                currentScale = Vector(1,1,1)
 
                 if isValid(propHolo) then
                     propHolo:setModel(currentModel)
@@ -303,7 +338,6 @@ if SERVER then
                         spawnProp()
                     end
                     print("Disguise model updated to: " .. currentModel)
-                    syncState()
                 end)
             end
             return "" 
@@ -326,12 +360,6 @@ if CLIENT then
     local cl_isFrozen = false
     local cl_currentModel = "models/props_junk/watermelon01.mdl"
 
-    net.receive("prop_disguise_sync", function()
-        cl_inPhysicsMode = net.readBool()
-        cl_isFrozen = net.readBool()
-        cl_currentModel = net.readString()
-    end)
-
     hook.add("CalcView", "PropCamera", function(ply, pos, angles, fov)
         local view = {}
         local maxs = ply:obbMaxs()
@@ -348,40 +376,5 @@ if CLIENT then
         view.angles = angles
         view.drawviewer = true
         return view
-    end)
-
-    hook.add("draw2d", "PropHUD", function()
-        render.setColor(Color(15, 15, 15, 220))
-        render.drawRect(30, 30, 250, 110)
-        
-        render.setFont("DermaDefault")
-        
-        render.setColor(Color(255, 255, 255))
-        render.drawText(40, 40, "=== DISGUISE ACTIVE ===")
-        
-        if cl_inPhysicsMode then
-            render.setColor(Color(255, 140, 0))
-            render.drawText(40, 60, "Mode: PHYSICS (WASD to roll)")
-            
-            if cl_isFrozen then
-                render.setColor(Color(255, 60, 60))
-                render.drawText(40, 75, "Status: FROZEN [ALT2]")
-            else
-                render.setColor(Color(60, 255, 60))
-                render.drawText(40, 75, "Status: UNANCHORED [ALT2]")
-            end
-        else
-            render.setColor(Color(0, 165, 255))
-            render.drawText(40, 60, "Mode: HOLOGRAM (Follows You)")
-            render.setColor(Color(180, 180, 180))
-            render.drawText(40, 75, "Press ALT1 to manifest physical prop")
-        end
-        
-        render.setColor(Color(200, 255, 200))
-        render.drawText(40, 90, "Look at a prop & press ZOOM to copy")
-
-        local cleanModel = cl_currentModel:match("([^/]+)%.mdl$") or cl_currentModel
-        render.setColor(Color(255, 255, 255, 140))
-        render.drawText(40, 110, "Model: " .. cleanModel)
     end)
 end
