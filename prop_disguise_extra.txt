@@ -1,4 +1,4 @@
---@name Prop Disguise (Stealth + Physics + Copy Properties)
+--@name Prop Disguise
 --@author John Doe
 --@shared
 
@@ -355,10 +355,6 @@ end
 
 if CLIENT then
     if player() ~= owner() then return end
-
-    local cl_inPhysicsMode = false
-    local cl_isFrozen = false
-    local cl_currentModel = "models/props_junk/watermelon01.mdl"
 
     hook.add("CalcView", "PropCamera", function(ply, pos, angles, fov)
         local view = {}
