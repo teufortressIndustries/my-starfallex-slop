@@ -1,4 +1,4 @@
---@name Prop Disguise (Stealth + Physics + Copy Properties)
+--@name Prop Disguise (Stealth + Physics + Copy Properties + Possession)
 --@author John Doe
 --@shared
 
@@ -16,11 +16,13 @@ if SERVER then
     local physProp = nil
 
     local inPhysicsMode = false
+    local isPossessing = false -- Track whether the physical prop is an external/map prop
     local isDetached = false -- Track whether we are detached from the physical prop
     local wasReloading = false
     local wasRightClick = false
     local wasZooming = false 
     local wasWalk = false
+    local wasRealReload = false -- Tracks standard 'R' key presses
     local isFrozen = false
     local lastJump = 0
     local wasAlive = true 
@@ -61,6 +63,12 @@ if SERVER then
     local function updateHologram()
         if not isValid(propHolo) then return end
         
+        -- Hide hologram if we are physically controlling an entity
+        if inPhysicsMode then
+            propHolo:setColor(Color(0,0,0,0))
+            return
+        end
+
         propHolo:setParent(ply)
         propHolo:setLocalPos(Vector(0, 0, holoOffsetZ))
         propHolo:setLocalAngles(Angle(0, 0, 0))
@@ -93,13 +101,15 @@ if SERVER then
     end
 
     local function cleanupProp()
-        if isValid(physProp) then
+        -- ONLY delete the prop if we actually spawned it! Map/external props remain untouched.
+        if isValid(physProp) and not isPossessing then
             physProp:remove()
         end
 
         physProp = nil
         isFrozen = false
         isDetached = false
+        isPossessing = false
 
         if isValid(propHolo) then
             propHolo:setColor(currentColor) -- Revert to copied color instead of plain white
@@ -119,6 +129,7 @@ if SERVER then
             )
 
             physProp:setOwner(ply)
+            isPossessing = false
 
             -- Wait an engine frame/tick so the physics prop initializes properly 
             -- before overriding its materials, skins, and scale matrix.
@@ -315,21 +326,95 @@ if SERVER then
         wasReloading = isReloading
 
         -- Detach feature toggled via WALK button (Only functions in Physics Mode)
-        if inPhysicsMode and isValid(physProp) then
+        if inPhysicsMode or isDetached then
             local isWalk = ply:keyDown(IN_KEY.WALK)
             if isWalk and not wasWalk then
                 isDetached = not isDetached
                 if isDetached then
                     print("Detached from prop! You can move freely.")
+                    
+                    -- FIX: If we spawned this prop ourselves, cut the cord!
+                    -- Turning 'isPossessing = true' tells cleanupProp() NEVER to delete it.
+                    if isValid(physProp) and not isPossessing then
+                        isPossessing = true 
+                        print("Your original prop has been left behind in the world safely.")
+                    end
                 else
-                    print("Attached back to prop!")
+                    if isValid(physProp) then
+                        print("Attached back to prop!")
+                    else
+                        -- Reverted back if no prop exists
+                        inPhysicsMode = false
+                        updateHologram()
+                        print("Returned to Hologram mode.")
+                    end
                 end
             end
             wasWalk = isWalk
         end
 
-        -- Copy Looked-at Prop Model & Properties (Zoom Key)
+        -- --- POSSESSION & COPY SYSTEM ---
+        local isRealReload = ply:keyDown(IN_KEY.RELOAD)
         local isZooming = ply:keyDown(IN_KEY.ZOOM)
+
+        -- POSSESS PROP (Pressing R while DETACHED)
+        if isRealReload and not wasRealReload and isDetached then
+            local tr = ply:getEyeTrace()
+            local target = tr.Entity
+            if isValid(target) and not target:isPlayer() then
+                local modelPath = target:getModel()
+                if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
+                    cleanupProp() -- Safe wipe current bindings without deleting anything
+
+                    -- --- FIX START ---
+                    -- Instantly hide the hologram right here so it doesn't flicker 
+                    -- while waiting for the 0.05s timer callback below.
+                    if isValid(propHolo) then
+                        propHolo:setColor(Color(0, 0, 0, 0))
+                    end
+                    -- --- FIX END ---
+
+                    -- Inherit properties from targeted external prop
+                    currentModel = modelPath
+                    currentSkin = target:getSkin() or 0
+                    currentMaterial = target:getMaterial() or ""
+                    currentColor = target:getColor() or Color(255, 255, 255, 255)
+                    
+                    if target.getScale then
+                        currentScale = target:getScale() or Vector(1,1,1)
+                    elseif target.getMatrix then
+                        local mat = target:getMatrix()
+                        currentScale = mat and mat:getScale() or Vector(1,1,1)
+                    else
+                        currentScale = Vector(1, 1, 1)
+                    end
+
+                    -- Tie our physical parameters to this prop
+                    physProp = target
+                    isPossessing = true
+                    inPhysicsMode = true
+                    isDetached = false -- Instantly re-attach to your newly acquired body
+
+                    local phys = physProp:getPhysicsObject()
+                    if isValid(phys) then
+                        phys:enableMotion(true)
+                        phys:wake()
+                    end
+
+                    if isValid(propHolo) then
+                        propHolo:setModel(currentModel)
+                    end
+
+                    updateHoloOffset(function()
+                        updateHologram()
+                        print("POSSESSED target prop! You are now attached and in control.")
+                    end)
+                end
+            end
+        end
+        wasRealReload = isRealReload
+
+        -- STANDARD PROPERTY COPY (ZOOM KEY ONLY)
         if isZooming and not wasZooming then
             local tr = ply:getEyeTrace()
             local target = tr.Entity
@@ -337,13 +422,10 @@ if SERVER then
                 local modelPath = target:getModel()
                 if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
                     currentModel = modelPath
-                    
-                    -- Extract entity visual properties
                     currentSkin = target:getSkin() or 0
                     currentMaterial = target:getMaterial() or ""
                     currentColor = target:getColor() or Color(255, 255, 255, 255)
                     
-                    -- Handle custom manipulation vs default tracking properties
                     if target.getScale then
                         currentScale = target:getScale() or Vector(1,1,1)
                     elseif target.getMatrix then
@@ -383,7 +465,6 @@ if SERVER then
 
             if modelPath and modelPath ~= "" then
                 currentModel = modelPath
-                -- Reset custom attributes for generic chat commands
                 currentSkin = 0
                 currentMaterial = ""
                 currentColor = Color(255, 255, 255, 255)
@@ -406,13 +487,27 @@ if SERVER then
         end
     end)
 
+    -- --- STEALTH MODIFICATIONS ---
+    hook.add("PlayerFootstep", "PropStealthFootsteps", function(p)
+        if p == ply then
+            return true
+        end
+    end)
+
+    hook.add("EntityEmitSound", "PropStealthVoices", function(soundData)
+        local ent = soundData.Entity
+        if isValid(ent) and (ent == ply or ent == physProp) then
+            soundData.Volume = 0
+            return true 
+        end
+    end)
+
     hook.add("removed", "CleanupDisguise", function()
         cleanupProp()
         ply:setModelScale(1)
         if not isValid(ply) then return end
         setPlayerHidden(false)
     end)
-
 end
 
 if CLIENT then
