@@ -311,6 +311,12 @@ if SERVER then
 
             if not inPhysicsMode and isValid(physProp) then
                 ply:setPos(physProp:getPos() - Vector(0, 0, holoOffsetZ))
+                
+                -- FIX: If we are intentionally abandoning a possessed/map prop to return to hologram mode,
+                -- remove it so it doesn't leave a permanent world copy behind.
+                if isPossessing then
+                    physProp:remove()
+                end
             end
 
             cleanupProp()
@@ -333,7 +339,7 @@ if SERVER then
                 if isDetached then
                     print("Detached from prop! You can move freely.")
                     
-                    -- FIX: If we spawned this prop ourselves, cut the cord!
+                    -- If we spawned this prop ourselves, cut the cord!
                     -- Turning 'isPossessing = true' tells cleanupProp() NEVER to delete it.
                     if isValid(physProp) and not isPossessing then
                         isPossessing = true 
@@ -366,13 +372,11 @@ if SERVER then
                 if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
                     cleanupProp() -- Safe wipe current bindings without deleting anything
 
-                    -- --- FIX START ---
                     -- Instantly hide the hologram right here so it doesn't flicker 
                     -- while waiting for the 0.05s timer callback below.
                     if isValid(propHolo) then
                         propHolo:setColor(Color(0, 0, 0, 0))
                     end
-                    -- --- FIX END ---
 
                     -- Inherit properties from targeted external prop
                     currentModel = modelPath
