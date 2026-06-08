@@ -20,10 +20,6 @@ local KEY_TOGGLE_STYLE = IN_KEY.SPEED     -- Change rolling style (Omni vs Vehic
 local KEY_DETACH       = IN_KEY.WALK      -- Detach from prop / Attach back to it
 local KEY_POSSESS      = IN_KEY.RELOAD    -- Crosshair trace possess while detached
 local KEY_COPY_PROP    = IN_KEY.ZOOM      -- Copy model of prop you are looking at
--- Note: Movement keys (W,A,S,D) and JUMP use standard Garry's Mod defaults.
-
--- Chat Command: Type "!prop <modelpath>" in chat to instantly change your prop!
---------------------------------------------------------------------------------
 
 if SERVER then
     local ply = owner()
@@ -36,8 +32,8 @@ if SERVER then
 
     local propHolo = holograms.create(ply:getPos(), ply:getAngles(), currentModel)
     local physProp = nil
-    
-    -- History Tracking System
+    local vehicleChair = nil
+
     local possessionHistory = {} 
     local historyIndex = 0
 
@@ -49,14 +45,13 @@ if SERVER then
     local wasRightClick = false
     local wasWalk = false
     local wasSneak = false 
-    local wasZooming = false -- FIXED: Track button history
+    local wasZooming = false
     local isFrozen = false
     local lastJump = 0
     local wasAlive = true 
 
-    -- Hold Tracking Configuration
     local undoKeyPressTime = 0
-    local holdThreshold = 0.4 -- Seconds required to register as a hold
+    local holdThreshold = 0.4 
 
     local holoOffsetZ = 0
     local detachedHoloPos = Vector(0, 0, 0)
@@ -68,7 +63,6 @@ if SERVER then
         if not isValid(ent) then return end
         if possessionHistory[historyIndex] == ent then return end
         
-        -- If we possessed something new while in the middle of our history chain, clear the "forward" history
         if historyIndex < #possessionHistory then
             for i = #possessionHistory, historyIndex + 1, -1 do
                 table.remove(possessionHistory, i)
@@ -86,7 +80,6 @@ if SERVER then
         if not isValid(ent) then return end
         ent:setSkin(currentSkin)
         ent:setMaterial(currentMaterial)
-        
         ent:setRenderMode(1) 
         ent:setColor(Color(currentColor.r, currentColor.g, currentColor.b, currentColor.a))
         
@@ -134,30 +127,54 @@ if SERVER then
     timer.simple(0.1, function()
         updateHoloOffset(function()
             updateHologram()
-            print("[Prop Disguise] Loaded! Use your configured keys to play, or use Suit Zoom to copy props.")
+            print("[Prop Disguise] Loaded! Use keys or Zoom to copy props.")
         end)
     end)
 
     local function setPlayerHidden(hidden)
         local alpha = hidden and 0 or 255
         local renderMode = hidden and 1 or 0
-
         ply:setColor(Color(255, 255, 255, alpha))
         ply:setRenderMode(renderMode)
     end
 
     local function cleanupProp()
+        if isValid(ply) and ply:inVehicle() then
+            ply:exitVehicle()
+        end
+    
+        if isValid(vehicleChair) then
+            vehicleChair:remove()
+            vehicleChair = nil
+        end
+    
         if isValid(physProp) and not isPossessing then
             physProp:remove()
         end
-
+    
         physProp = nil
         isFrozen = false
         isDetached = false
         isPossessing = false
-
+    
         if isValid(propHolo) then
             propHolo:setColor(currentColor) 
+        end
+    end
+
+    local function checkAndCreateChair(targetProp)
+        if not isValid(targetProp) then return end
+        
+        if not isValid(vehicleChair) then
+            vehicleChair = prop.createSent(targetProp:getPos(), Angle(), "Chair_Plastic", true)
+            if isValid(vehicleChair) then
+                vehicleChair:setNoDraw(true)
+                vehicleChair:setNocollideAll(true)
+            end
+        end
+
+        if isValid(vehicleChair) and not isDetached and not ply:inVehicle() then
+            ply:enterVehicle(vehicleChair)
         end
     end
 
@@ -165,59 +182,46 @@ if SERVER then
         if isValid(propHolo) then
             propHolo:setColor(Color(currentColor.r, currentColor.g, currentColor.b, 0))
         end
-
+    
         physProp = prop.create(
             ply:getPos() + Vector(0, 0, holoOffsetZ),
             Angle(0, ply:getAngles().y, 0),
             currentModel
         )
-
+    
         isPossessing = false
-
+    
         timer.simple(0, function()
             if not isValid(physProp) then return end 
-                
             applyVisualProperties(physProp)
                 
             local phys = physProp:getPhysicsObject()
             if isValid(phys) then
                 phys:wake()
             end
+    
+            checkAndCreateChair(physProp)
+            print("Physical Prop Disguise Spawned.") 
         end)
     end
 
     local function handlePhysicsMovement()
         if not isValid(physProp) then return end
-        if isDetached then return end
-
-        local propPos = physProp:getPos()
-        local propRadius = (physProp:obbMaxs().y * currentScale.y) + 16 
-        
-        local playerFacing = ply:getEyeAngles():getForward()
-        playerFacing.z = 0
-        playerFacing:normalize()
-        local targetPos = propPos - (playerFacing * propRadius)
-
-        local traceData = {
-            start = targetPos + Vector(0, 0, 50),
-            endpos = targetPos - Vector(0, 0, 200),
-            filter = function(ent)
-                if ent == ply or ent == physProp then return false end
-                return true
-            end
-        }
-        
-        local tr = trace.line(traceData.start, traceData.endpos, traceData.filter)
-        ply:setPos(tr.Hit and tr.HitPos or targetPos)
 
         local phys = physProp:getPhysicsObject()
         if not isValid(phys) then return end
 
-        local rightClick = ply:keyDown(KEY_FREEZE)
+        if isValid(vehicleChair) then
+            vehicleChair:setPos(physProp:getPos()+Vector(0,0,10))
+            vehicleChair:setAngles(Angle(0))
+            vehicleChair:setFrozen(true)
+        end
 
+        if isDetached then return end
+
+        local rightClick = ply:keyDown(KEY_FREEZE)
         if rightClick and not wasRightClick then
             isFrozen = not isFrozen
-
             if isFrozen then
                 phys:enableMotion(false)
                 print("Prop Frozen in place!")
@@ -227,7 +231,6 @@ if SERVER then
                 print("Prop Unfrozen!")
             end
         end
-
         wasRightClick = rightClick
 
         if isFrozen then return end
@@ -315,6 +318,17 @@ if SERVER then
             propHolo:setModel(currentModel)
             propHolo:setColor(Color(0, 0, 0, 0))
         end
+        
+        local propOwnerName = "the Map/Server"
+        if physProp.getOwner then
+            local propOwner = physProp:getOwner()
+            if isValid(propOwner) and propOwner:isPlayer() then
+                propOwnerName = propOwner:getName()
+            end
+        end
+
+        checkAndCreateChair(physProp)
+        print("Possessing Prop: " .. currentModel .. " (Owned by: " .. propOwnerName .. ")")
     end
 
     setPlayerHidden(true)
@@ -332,10 +346,10 @@ if SERVER then
                 setPlayerHidden(false)
                 possessionHistory = {} 
                 historyIndex = 0
-                
                 if isValid(propHolo) then
                     propHolo:setColor(Color(255, 255, 255, 0))
                 end
+                print("Player died. Disguise system wiped.") 
             end
             return 
         else
@@ -343,16 +357,19 @@ if SERVER then
                 wasAlive = true
                 ply:setModelScale(0)
                 setPlayerHidden(true)
-                
                 if isValid(propHolo) then
                     propHolo:setColor(currentColor)
                     updateHoloOffset(function()
                         updateHologram()
                         print("Disguise Reactivated: Hologram Mode")
                     end)
-                else
-                    print("Disguise Reactivated: Hologram Mode")
                 end
+            end
+        end
+
+        if inPhysicsMode and not isDetached and isValid(vehicleChair) then
+            if not ply:inVehicle() then
+                ply:enterVehicle(vehicleChair)
             end
         end
 
@@ -363,89 +380,69 @@ if SERVER then
             print("Your physical disguise was DESTROYED! Reverting to Hologram Mode.")
         end
 
-        -- NEW CONTROLS INTERACTION LOGIC
         local isReloading = ply:keyDown(KEY_UNDO_CYCLE)
         if isReloading and not wasReloading then
-            -- Captured button down event
             undoKeyPressTime = timer.curtime()
         elseif not isReloading and wasReloading then
-            -- Captured button up event
             local holdDuration = timer.curtime() - undoKeyPressTime
 
             if holdDuration >= holdThreshold then
-                -- HOLO MODE TOGGLE (Button held down)
                 inPhysicsMode = not inPhysicsMode
-
                 if not inPhysicsMode and isValid(physProp) then
                     ply:setPos(physProp:getPos() - Vector(0, 0, holoOffsetZ))
                 end
-
                 cleanupProp()
-
                 if inPhysicsMode then
+                    print("Switched to PHYSICAL mode.") 
                     spawnProp()
-                    print("Switched to: Physics Mode!")
                 else
+                    print("Switched to HOLOGRAM mode.") 
                     updateHologram()
-                    print("Switched to: Hologram Mode (Holo Toggle Hold)")
                 end
             else
-                -- CLASSIC CLICK: History Undo / Redo
                 if inPhysicsMode and isPossessing then
                     local wantRedo = ply:keyDown(IN_KEY.DUCK)
                     local foundValid = false
 
                     if wantRedo then
-                        -- Go FORWARD in history (Redo)
                         for i = historyIndex + 1, #possessionHistory do
                             local historicalProp = possessionHistory[i]
                             if isValid(historicalProp) then
                                 historyIndex = i
                                 switchPossessedProp(historicalProp)
-                                updateHoloOffset(function()
-                                    print("-> Redo: Advanced forward to next valid prop in history!")
-                                end)
+                                updateHoloOffset(function() print("-> Redo Forward to stack idx: " .. i) end)
                                 foundValid = true
                                 break
                             end
                         end
-                        if not foundValid then print("Already at the newest valid item in history.") end
                     else
-                        -- Go BACKWARD in history (Undo)
                         for i = historyIndex - 1, 1, -1 do
                             local historicalProp = possessionHistory[i]
                             if isValid(historicalProp) then
                                 historyIndex = i
                                 switchPossessedProp(historicalProp)
-                                updateHoloOffset(function()
-                                    print("<- Undo: Reverted back to previous valid prop in history!")
-                                end)
+                                updateHoloOffset(function() print("<- Undo Backward to stack idx: " .. i) end)
                                 foundValid = true
                                 break
                             end
                         end
                         
-                        -- Replaced heavy wipe reset loop with a clean fallback. It now does nothing.
                         if not foundValid then
                             print("Undo: No previous valid props remaining in stack. Hold and release to toggle Holo.")
                         end
                     end
                 else
-                    -- Standard click toggle when not possessing an entity
                     inPhysicsMode = not inPhysicsMode
-
                     if not inPhysicsMode and isValid(physProp) then
                         ply:setPos(physProp:getPos() - Vector(0, 0, holoOffsetZ))
                     end
-
                     cleanupProp()
-
-                    if inPhysicsMode then
-                        spawnProp()
-                        print("Switched to: Physics Mode!")
-                    else
-                        updateHologram()
-                        print("Switched to: Hologram Mode")
+                    if inPhysicsMode then 
+                        print("Toggled mode: PHYSICAL") 
+                        spawnProp() 
+                    else 
+                        print("Toggled mode: HOLOGRAM") 
+                        updateHologram() 
                     end
                 end
             end
@@ -465,39 +462,22 @@ if SERVER then
             wasSneak = isSneak
         end
 
-        -- Detach logic (Works for both physics props and holograms)
         local isWalk = ply:keyDown(KEY_DETACH)
         if isWalk and not wasWalk then
             isDetached = not isDetached
             if isDetached then
-                print("Detached from disguise! You can move freely.")
-                if inPhysicsMode then
-                    if isValid(physProp) and not isPossessing then
-                        isPossessing = true 
-                        print("Your original prop has been safely left behind.")
-                    end
-                else
-                    if isValid(propHolo) then
-                        detachedHoloPos = propHolo:getPos()
-                        detachedHoloAng = propHolo:getAngles()
-                        updateHologram()
-                    end
+                print("Detached from disguise!")
+                if ply:inVehicle() then ply:exitVehicle() end 
+                if inPhysicsMode and isValid(physProp) and not isPossessing then
+                    isPossessing = true 
                 end
             else
-                if inPhysicsMode then
-                    if isValid(physProp) then
-                        print("Attached back to prop!")
-                    else
-                        inPhysicsMode = false
-                        updateHologram()
-                        print("Returned to Hologram mode.")
-                    end
-                else
-                    if isValid(propHolo) then
-                        ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
-                        updateHologram()
-                    end
-                    print("Attached back to hologram!")
+                print("Attached back to disguise!")
+                if inPhysicsMode and isValid(physProp) then
+                    checkAndCreateChair(physProp)
+                elseif not inPhysicsMode and isValid(propHolo) then
+                    ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
+                    updateHologram()
                 end
             end
         end
@@ -510,58 +490,28 @@ if SERVER then
             local tr = ply:getEyeTrace()
             local target = tr.Entity
             if isValid(target) and not target:isPlayer() then
-                if not hasPermission("entities.canTool", target) then
-                    print("ERROR: You do not have permission to tool/possess this entity!")
-                else
+                if hasPermission("entities.canTool", target) then
                     local modelPath = target:getModel()
                     if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
-                        cleanupProp()
-
-                        if isValid(propHolo) then
-                            propHolo:setColor(Color(0, 0, 0, 0))
-                        end
-
+                        
+                        if isValid(vehicleChair) then vehicleChair:remove() vehicleChair = nil end
+                        
                         currentModel = modelPath
                         currentSkin = target:getSkin() or 0
                         currentMaterial = target:getMaterial() or ""
                         currentColor = target:getColor() or Color(255, 255, 255, 255)
                         
-                        if target.getScale then
-                            currentScale = target:getScale() or Vector(1,1,1)
-                        elseif target.getMatrix then
-                            local mat = target:getMatrix()
-                            currentScale = mat and mat:getScale() or Vector(1,1,1)
-                        else
-                            currentScale = Vector(1, 1, 1)
-                        end
-
-                        physProp = target
-                        isPossessing = true
-                        inPhysicsMode = true
-                        isDetached = false
-                        
+                        switchPossessedProp(target)
                         addPropToHistory(physProp) 
-
-                        local phys = physProp:getPhysicsObject()
-                        if isValid(phys) then
-                            phys:enableMotion(true)
-                            phys:wake()
-                        end
-
-                        if isValid(propHolo) then
-                            propHolo:setModel(currentModel)
-                        end
-
-                        updateHoloOffset(function()
-                            updateHologram()
-                            print("POSSESSED target prop! Added to possession history chain.")
-                        end)
+                    else
+                        print("Possession Failed: Target doesn't have a valid .mdl path.") 
                     end
+                else
+                    print("Possession Failed: No permission to tool target.") 
                 end
             end
         end
 
-        -- FIXED: Added "and not wasZooming" to prevent execution loops while holding the key
         if isZooming and not wasZooming then
             local tr = ply:getEyeTrace()
             local target = tr.Entity
@@ -573,31 +523,19 @@ if SERVER then
                     currentMaterial = target:getMaterial() or ""
                     currentColor = target:getColor() or Color(255, 255, 255, 255)
                     
-                    if target.getScale then
-                        currentScale = target:getScale() or Vector(1,1,1)
-                    elseif target.getMatrix then
-                        local mat = target:getMatrix()
-                        currentScale = mat and mat:getScale() or Vector(1,1,1)
-                    else
-                        currentScale = Vector(1, 1, 1)
-                    end
-
-                    if isValid(propHolo) then
-                        propHolo:setModel(currentModel)
-                    end
-
+                    if isValid(propHolo) then propHolo:setModel(currentModel) end
                     updateHoloOffset(function()
                         updateHologram()
                         if inPhysicsMode then
                             cleanupProp()
                             spawnProp()
                         end
-                        print("Copied prop appearance successfully!")
+                        print("Copied prop appearance successfully! (" .. currentModel .. ")")
                     end)
                 end
             end
         end
-        wasZooming = isZooming -- FIXED: Save the key state for the next execution frame
+        wasZooming = isZooming
 
         if inPhysicsMode then
             handlePhysicsMovement()
@@ -606,122 +544,30 @@ if SERVER then
 
     hook.add("PlayerSay", "PropDisguiseChat", function(talker, text, teamChat)
         if talker ~= ply then return end
-
         if text:sub(1, 6):lower() == "!prop " then
             local modelPath = text:sub(7):trim()
-
             if modelPath and modelPath ~= "" then
                 currentModel = modelPath
-                currentSkin = 0
-                currentMaterial = ""
-                currentColor = Color(255, 255, 255, 255)
-                currentScale = Vector(1,1,1)
-
-                if isValid(propHolo) then
-                    propHolo:setModel(currentModel)
-                end
-
+                if isValid(propHolo) then propHolo:setModel(currentModel) end
                 updateHoloOffset(function()
                     updateHologram()
                     if inPhysicsMode then
                         cleanupProp()
                         spawnProp()
                     end
-                    print("Disguise model updated to: " .. currentModel)
+                    print("Model set via Chat: " .. currentModel) 
                 end)
+            else
+                print("Error: Model path cannot be empty.") 
             end
             return "" 
-        end
-    end)
-
-    hook.add("PlayerFootstep", "PropStealthFootsteps", function(p)
-        if p == ply then
-            return true
-        end
-    end)
-
-    hook.add("EntityEmitSound", "PropStealthVoices", function(soundData)
-        local ent = soundData.Entity
-        if isValid(ent) and (ent == ply or ent == physProp) then
-            soundData.Volume = 0
-            return true 
         end
     end)
 
     hook.add("removed", "CleanupDisguise", function()
         cleanupProp()
         ply:setModelScale(1)
-        if not isValid(ply) then return end
         setPlayerHidden(false)
-    end)
-end
-
-if CLIENT then
-    if player() ~= owner() then return end
-
-    hook.add("CalcView", "PropCamera", function(ply, pos, angles, fov)
-        if ply ~= player() then return end
-
-        local view = {}
-        local propHeight = 36
-        local propWidth = 36
-
-        local targetProp = nil
-        local props = find.all()
-        for _, ent in ipairs(props) do
-            if isValid(ent) and hasPermission("entities.canTool", ent) and ent:getClass() == "prop_physics" then
-                targetProp = ent
-                break
-            end
-        end
-
-        if not isValid(targetProp) then
-            local holos = holograms.getMap()
-            for _, holo in ipairs(holos) do
-                if isValid(holo) and holo:getOwner() == ply then
-                    targetProp = holo
-                    break
-                end
-            end
-        end
-
-        if isValid(targetProp) then
-            local maxs = targetProp:obbMaxs()
-            local mins = targetProp:obbMins()
-            
-            local mat = targetProp:getMatrix()
-            local scaleVec = mat and mat:getScale() or Vector(1,1,1)
-            local scaleFactor = math.max(scaleVec.x, scaleVec.y, scaleVec.z)
-
-            propHeight = (maxs.z - mins.z) * scaleFactor
-            propWidth = math.max(maxs.x - mins.x, maxs.y - mins.y) * scaleFactor
-        else
-            local plyMaxs = ply:obbMaxs()
-            propHeight = plyMaxs.z
-            propWidth = plyMaxs.y * 2
-        end
-
-        local baseDistance = math.max(100, propWidth * 2.2)
-        local verticalOffset = propHeight * 0.65
-        
-        local targetOffset = angles:getForward() * -baseDistance + angles:getUp() * verticalOffset
-        local cameraStartPos = pos + Vector(0, 0, verticalOffset * 0.5)
-
-        local filter = {ply}
-        if isValid(targetProp) then table.insert(filter, targetProp) end
-
-        local tr = trace.line(cameraStartPos, cameraStartPos + targetOffset, filter)
-        
-        if tr.Hit then
-            view.origin = tr.HitPos + tr.HitNormal * 6
-        else
-            view.origin = tr.HitPos
-        end
-        
-        view.angles = angles
-        view.fov = fov
-        view.drawviewer = true 
-        
-        return view
+        print("[Prop Disguise] Expression removed, clean up complete.") 
     end)
 end
