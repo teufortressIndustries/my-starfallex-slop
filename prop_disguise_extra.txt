@@ -14,7 +14,7 @@ local DEFAULT_MODEL   = "models/props_junk/watermelon01.mdl" -- Starting prop
 --------------------------------------------------------------------------------
 --  CONTROLS CONFIGURATION (Rebind your keys easily here!)
 --------------------------------------------------------------------------------
-local KEY_UNDO_CYCLE   = IN_KEY.ALT1      -- Cycle previous props / Toggle Holo Mode
+local KEY_UNDO_CYCLE   = IN_KEY.ALT1      -- Toggle Holo Mode / Cycle possessed props (Duck+ALT1 to cycle forward)
 local KEY_FREEZE       = IN_KEY.ALT2      -- Freeze / Unfreeze your prop in place
 local KEY_TOGGLE_STYLE = IN_KEY.SPEED     -- Change rolling style (Omni vs Vehicle)
 local KEY_DETACH       = IN_KEY.WALK      -- Detach from prop / Attach back to it
@@ -36,7 +36,10 @@ if SERVER then
 
     local propHolo = holograms.create(ply:getPos(), ply:getAngles(), currentModel)
     local physProp = nil
+    
+    -- History Tracking System
     local possessionHistory = {} 
+    local historyIndex = 0
 
     local inPhysicsMode = false
     local isVehicleMode = false 
@@ -50,6 +53,10 @@ if SERVER then
     local lastJump = 0
     local wasAlive = true 
 
+    -- Hold Tracking Configuration
+    local undoKeyPressTime = 0
+    local holdThreshold = 0.4 -- Seconds required to register as a hold
+
     local holoOffsetZ = 0
     local detachedHoloPos = Vector(0, 0, 0)
     local detachedHoloAng = Angle(0, 0, 0)
@@ -58,12 +65,20 @@ if SERVER then
 
     local function addPropToHistory(ent)
         if not isValid(ent) then return end
-        if possessionHistory[#possessionHistory] == ent then return end
+        if possessionHistory[historyIndex] == ent then return end
+        
+        -- If we possessed something new while in the middle of our history chain, clear the "forward" history
+        if historyIndex < #possessionHistory then
+            for i = #possessionHistory, historyIndex + 1, -1 do
+                table.remove(possessionHistory, i)
+            end
+        end
         
         table.insert(possessionHistory, ent)
         if #possessionHistory > 10 then 
             table.remove(possessionHistory, 1)
         end
+        historyIndex = #possessionHistory
     end
 
     local function applyVisualProperties(ent)
@@ -150,28 +165,23 @@ if SERVER then
             propHolo:setColor(Color(currentColor.r, currentColor.g, currentColor.b, 0))
         end
 
-        pcall(function()
-            physProp = prop.create(
-                ply:getPos() + Vector(0, 0, holoOffsetZ),
-                Angle(0, ply:getAngles().y, 0),
-                currentModel
-            )
+        physProp = prop.create(
+            ply:getPos() + Vector(0, 0, holoOffsetZ),
+            Angle(0, ply:getAngles().y, 0),
+            currentModel
+        )
 
-            physProp:setOwner(ply)
-            isPossessing = false
+        isPossessing = false
 
-            timer.simple(0, function()
-                if not isValid(physProp) then return end
+        timer.simple(0, function()
+            if not isValid(physProp) then return end 
                 
-                addPropToHistory(physProp) 
+            applyVisualProperties(physProp)
                 
-                applyVisualProperties(physProp)
-                
-                local phys = physProp:getPhysicsObject()
-                if isValid(phys) then
-                    phys:wake()
-                end
-            end)
+            local phys = physProp:getPhysicsObject()
+            if isValid(phys) then
+                phys:wake()
+            end
         end)
     end
 
@@ -283,6 +293,29 @@ if SERVER then
         end
     end
 
+    local function switchPossessedProp(targetProp)
+        physProp = targetProp
+        isPossessing = true
+        inPhysicsMode = true
+        isDetached = false
+        
+        currentModel = physProp:getModel()
+        currentSkin = physProp:getSkin() or 0
+        currentMaterial = physProp:getMaterial() or ""
+        currentColor = physProp:getColor() or Color(255, 255, 255, 255)
+        
+        local phys = physProp:getPhysicsObject()
+        if isValid(phys) then
+            phys:enableMotion(true)
+            phys:wake()
+        end
+        
+        if isValid(propHolo) then
+            propHolo:setModel(currentModel)
+            propHolo:setColor(Color(0, 0, 0, 0))
+        end
+    end
+
     setPlayerHidden(true)
 
     hook.add("Think", "PropLogic", function()
@@ -297,6 +330,7 @@ if SERVER then
                 ply:setModelScale(1)
                 setPlayerHidden(false)
                 possessionHistory = {} 
+                historyIndex = 0
                 
                 if isValid(propHolo) then
                     propHolo:setColor(Color(255, 255, 255, 0))
@@ -328,69 +362,17 @@ if SERVER then
             print("Your physical disguise was DESTROYED! Reverting to Hologram Mode.")
         end
 
+        -- NEW CONTROLS INTERACTION LOGIC
         local isReloading = ply:keyDown(KEY_UNDO_CYCLE)
         if isReloading and not wasReloading then
-            
-            if inPhysicsMode and isPossessing then
-                local foundPrevious = false
-                
-                for i = #possessionHistory - 1, 1, -1 do
-                    local historicalProp = possessionHistory[i]
-                    
-                    if isValid(historicalProp) then
-                        table.remove(possessionHistory) 
-                        
-                        physProp = historicalProp
-                        isPossessing = true
-                        inPhysicsMode = true
-                        isDetached = false
-                        
-                        currentModel = physProp:getModel()
-                        currentSkin = physProp:getSkin() or 0
-                        currentMaterial = physProp:getMaterial() or ""
-                        currentColor = physProp:getColor() or Color(255, 255, 255, 255)
-                        
-                        local phys = physProp:getPhysicsObject()
-                        if isValid(phys) then
-                            phys:enableMotion(true)
-                            phys:wake()
-                        end
-                        
-                        if isValid(propHolo) then
-                            propHolo:setModel(currentModel)
-                            propHolo:setColor(Color(0, 0, 0, 0))
-                        end
-                        
-                        updateHoloOffset(function()
-                            print("<- Undo: Reverted back to previous valid prop in history!")
-                        end)
-                        
-                        foundPrevious = true
-                        break
-                    else
-                        table.remove(possessionHistory, i)
-                    end
-                end
-                
-                if not foundPrevious then
-                    print("No previous valid props remaining in stack. Resetting to Default Model in Hologram Mode.")
-                    inPhysicsMode = false
-                    cleanupProp()
-                    
-                    currentModel = DEFAULT_MODEL
-                    currentSkin = 0
-                    currentMaterial = ""
-                    currentColor = Color(255, 255, 255, 255)
-                    currentScale = Vector(1, 1, 1)
-                    
-                    if isValid(propHolo) then
-                        propHolo:setModel(currentModel)
-                    end
-                    updateHoloOffset(function()
-                        updateHologram()
-                    end)
-                end
-            else
+            -- Captured button down event
+            undoKeyPressTime = timer.curtime()
+        elseif not isReloading and wasReloading then
+            -- Captured button up event
+            local holdDuration = timer.curtime() - undoKeyPressTime
+
+            if holdDuration >= holdThreshold then
+                -- HOLO MODE TOGGLE (Button held down)
                 inPhysicsMode = not inPhysicsMode
 
                 if not inPhysicsMode and isValid(physProp) then
@@ -404,7 +386,66 @@ if SERVER then
                     print("Switched to: Physics Mode!")
                 else
                     updateHologram()
-                    print("Switched to: Hologram Mode")
+                    print("Switched to: Hologram Mode (Holo Toggle Hold)")
+                end
+            else
+                -- CLASSIC CLICK: History Undo / Redo
+                if inPhysicsMode and isPossessing then
+                    local wantRedo = ply:keyDown(IN_KEY.DUCK)
+                    local foundValid = false
+
+                    if wantRedo then
+                        -- Go FORWARD in history (Redo)
+                        for i = historyIndex + 1, #possessionHistory do
+                            local historicalProp = possessionHistory[i]
+                            if isValid(historicalProp) then
+                                historyIndex = i
+                                switchPossessedProp(historicalProp)
+                                updateHoloOffset(function()
+                                    print("-> Redo: Advanced forward to next valid prop in history!")
+                                end)
+                                foundValid = true
+                                break
+                            end
+                        end
+                        if not foundValid then print("Already at the newest valid item in history.") end
+                    else
+                        -- Go BACKWARD in history (Undo)
+                        for i = historyIndex - 1, 1, -1 do
+                            local historicalProp = possessionHistory[i]
+                            if isValid(historicalProp) then
+                                historyIndex = i
+                                switchPossessedProp(historicalProp)
+                                updateHoloOffset(function()
+                                    print("<- Undo: Reverted back to previous valid prop in history!")
+                                end)
+                                foundValid = true
+                                break
+                            end
+                        end
+                        
+                        -- Replaced heavy wipe reset loop with a clean fallback. It now does nothing.
+                        if not foundValid then
+                            print("Undo: No previous valid props remaining in stack. Hold and release to toggle Holo.")
+                        end
+                    end
+                else
+                    -- Standard click toggle when not possessing an entity
+                    inPhysicsMode = not inPhysicsMode
+
+                    if not inPhysicsMode and isValid(physProp) then
+                        ply:setPos(physProp:getPos() - Vector(0, 0, holoOffsetZ))
+                    end
+
+                    cleanupProp()
+
+                    if inPhysicsMode then
+                        spawnProp()
+                        print("Switched to: Physics Mode!")
+                    else
+                        updateHologram()
+                        print("Switched to: Hologram Mode")
+                    end
                 end
             end
         end
