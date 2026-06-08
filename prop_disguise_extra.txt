@@ -10,6 +10,7 @@ local VEHICLE_SPEED   = 35   -- How fast you move forward/backward in Vehicle Mo
 local STEERING_SPEED  = 25    -- How fast you turn left/right in Vehicle Mode
 local JUMP_HEIGHT     = 250    -- How high you can jump as a prop
 local DEFAULT_MODEL   = "models/props_junk/watermelon01.mdl" -- Starting prop
+local TAUNT_COOLDOWN  = 0      -- Cooldown in seconds between taunts
 
 --------------------------------------------------------------------------------
 --  CONTROLS CONFIGURATION (Rebind your keys easily here!)
@@ -20,6 +21,23 @@ local KEY_TOGGLE_STYLE = IN_KEY.SPEED     -- Change rolling style (Omni vs Vehic
 local KEY_DETACH       = IN_KEY.WALK      -- Detach from prop / Attach back to it
 local KEY_POSSESS      = IN_KEY.RELOAD    -- Crosshair trace possess while detached
 local KEY_COPY_PROP    = IN_KEY.ZOOM      -- Copy model of prop you are looking at
+local KEY_TAUNT        = IN_KEY.SCORE     -- TAB Key to play random sounds
+
+--------------------------------------------------------------------------------
+--  TAUNT SOUNDBOARD DATA
+--------------------------------------------------------------------------------
+local TAUNT_SOUNDS = {
+    "ambient/alarms/klaxon1.wav",
+    "garrysmod/balloon_pop_cute.wav",
+    "buttons/combine_button1.wav",
+    "vo/npc/male01/answer30.wav",
+    "vo/npc/male01/hi01.wav",
+    "vo/npc/male01/behindyou01.wav",
+    "vo/npc/male01/question26.wav",
+    "friends/friend_join.wav",
+    "friends/friend_online.wav",
+    "friends/message.wav",
+}
 
 if SERVER then
     local ply = owner()
@@ -46,8 +64,10 @@ if SERVER then
     local wasWalk = false
     local wasSneak = false 
     local wasZooming = false
+    local wasTaunting = false
     local isFrozen = false
     local lastJump = 0
+    local lastTaunt = 0
     local wasAlive = true 
 
     local undoKeyPressTime = 0
@@ -379,6 +399,33 @@ if SERVER then
             updateHologram()
             print("Your physical disguise was DESTROYED! Reverting to Hologram Mode.")
         end
+
+        local isTaunting = ply:keyDown(KEY_TAUNT)
+        if isTaunting and not wasTaunting then
+            if not isDetached then
+                local currentTime = timer.curtime()
+                if (currentTime - lastTaunt) >= TAUNT_COOLDOWN then
+                    local randomSound = TAUNT_SOUNDS[math.random(1, #TAUNT_SOUNDS)]
+                    
+                    local soundSource = nil
+                    if inPhysicsMode and isValid(physProp) then
+                        soundSource = physProp
+                    elseif not inPhysicsMode and isValid(propHolo) then
+                        soundSource = propHolo
+                    end
+
+                    if isValid(soundSource) then
+                        soundSource:emitSound(randomSound)
+                        lastTaunt = currentTime
+                        print("Played sound: " .. randomSound)
+                    end
+                else
+                    local timeLeft = math.ceil(TAUNT_COOLDOWN - (currentTime - lastTaunt))
+                    print("Taunt on cooldown! Wait " .. timeLeft .. "s.")
+                end
+            end
+        end
+        wasTaunting = isTaunting
 
         local isReloading = ply:keyDown(KEY_UNDO_CYCLE)
         if isReloading and not wasReloading then
