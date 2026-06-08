@@ -465,9 +465,15 @@ if SERVER then
         local isWalk = ply:keyDown(KEY_DETACH)
         if isWalk and not wasWalk then
             isDetached = not isDetached
+            
             if isDetached then
                 print("Detached from disguise! You can move freely.")
+                
                 if inPhysicsMode then
+                    if ply:inVehicle() then 
+                        ply:exitVehicle() 
+                    end 
+                    
                     if isValid(physProp) and not isPossessing then
                         isPossessing = true 
                         print("Your original prop has been safely left behind.")
@@ -479,21 +485,23 @@ if SERVER then
                         updateHologram()
                     end
                 end
+                
             else
                 if inPhysicsMode then
                     if isValid(physProp) then
-                        print("Attached back to prop!")
+                        print("Attached back to physics prop!")
+                        checkAndCreateChair(physProp)
                     else
                         inPhysicsMode = false
                         updateHologram()
-                        print("Returned to Hologram mode.")
+                        print("Prop lost! Returned to Hologram mode.")
                     end
                 else
                     if isValid(propHolo) then
                         ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
                         updateHologram()
+                        print("Attached back to hologram!")
                     end
-                    print("Attached back to hologram!")
                 end
             end
         end
