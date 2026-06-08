@@ -49,6 +49,7 @@ if SERVER then
     local wasRightClick = false
     local wasWalk = false
     local wasSneak = false 
+    local wasZooming = false -- FIXED: Track button history
     local isFrozen = false
     local lastJump = 0
     local wasAlive = true 
@@ -560,7 +561,8 @@ if SERVER then
             end
         end
 
-        if isZooming then
+        -- FIXED: Added "and not wasZooming" to prevent execution loops while holding the key
+        if isZooming and not wasZooming then
             local tr = ply:getEyeTrace()
             local target = tr.Entity
             if isValid(target) and not target:isPlayer() then
@@ -595,6 +597,7 @@ if SERVER then
                 end
             end
         end
+        wasZooming = isZooming -- FIXED: Save the key state for the next execution frame
 
         if inPhysicsMode then
             handlePhysicsMovement()
