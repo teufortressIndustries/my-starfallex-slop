@@ -466,18 +466,34 @@ if SERVER then
         if isWalk and not wasWalk then
             isDetached = not isDetached
             if isDetached then
-                print("Detached from disguise!")
-                if ply:inVehicle() then ply:exitVehicle() end 
-                if inPhysicsMode and isValid(physProp) and not isPossessing then
-                    isPossessing = true 
+                print("Detached from disguise! You can move freely.")
+                if inPhysicsMode then
+                    if isValid(physProp) and not isPossessing then
+                        isPossessing = true 
+                        print("Your original prop has been safely left behind.")
+                    end
+                else
+                    if isValid(propHolo) then
+                        detachedHoloPos = propHolo:getPos()
+                        detachedHoloAng = propHolo:getAngles()
+                        updateHologram()
+                    end
                 end
             else
-                print("Attached back to disguise!")
-                if inPhysicsMode and isValid(physProp) then
-                    checkAndCreateChair(physProp)
-                elseif not inPhysicsMode and isValid(propHolo) then
-                    ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
-                    updateHologram()
+                if inPhysicsMode then
+                    if isValid(physProp) then
+                        print("Attached back to prop!")
+                    else
+                        inPhysicsMode = false
+                        updateHologram()
+                        print("Returned to Hologram mode.")
+                    end
+                else
+                    if isValid(propHolo) then
+                        ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
+                        updateHologram()
+                    end
+                    print("Attached back to hologram!")
                 end
             end
         end
