@@ -1,4 +1,4 @@
---@name Prop Disguise Extra (Optimized)
+--@name Prop Disguise Extra
 --@author John Doe
 --@shared
 
@@ -92,6 +92,9 @@ if SERVER then
   local traceTickCount  = 0
   local lastGroundHit   = false
 
+  -- Angle optimization throttle
+  local angleTickCount  = 0
+
   local cachedInVehicle = false
 
   ply:setModelScale(0)
@@ -156,7 +159,7 @@ if SERVER then
       propHolo:setParent(nil)
       propHolo:setPos(detachedHoloPos)
       propHolo:setAngles(detachedHoloAng)
-      setPlayerHidden(true) -- Force safety catch when unparented
+      setPlayerHidden(true) 
     else
       propHolo:setParent(ply)
       propHolo:setLocalPos(Vector(0, 0, holoOffsetZ))
@@ -305,7 +308,7 @@ if SERVER then
   end
 
   --------------------------------------------------------------------------------
-  -- PHYSICS MOVEMENT (UNTOUCHED SPECIAL MODE)
+  -- PHYSICS MOVEMENT (UNTHROTTLED POSITIONS, OPTIMIZED ANGLES)
   --------------------------------------------------------------------------------
 
   local function handlePhysicsMovement()
@@ -315,32 +318,16 @@ if SERVER then
     if not isValid(phys) then return end
 
     local worldCOM = physProp:localToWorld(cachedMassCenterLocal)
-
-    ---- CHAIR MANAGEMENT -------------------------------------------------------
-    if isValid(vehicleChair) then
-      local chairPhys = vehicleChair:getPhysicsObject()
-      if isGlideMode then
-        if isValid(chairPhys) then
-          chairPhys:enableGravity(false)
-          chairPhys:enableMotion(false)
-        end
-      end
-    end
+    local now = timer.curtime()
 
     if isDetached or isFrozen then return end
-
-    local now = timer.curtime()
 
     ---- GLIDE MODE -------------------------------------------------------------
     if isGlideMode then
       if isValid(vehicleChair) then
-        phys:enableMotion(true)
-        phys:wake()
-
         local currentPos = physProp:getPos()
         local actualVel  = phys:getVelocity()
-
-        local isGrabbed = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
+        local isGrabbed  = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
 
         if isGrabbed then
           isOutOfControl       = true
@@ -360,6 +347,7 @@ if SERVER then
           phys:enableGravity(false)
           local eyeAng = ply:getEyeAngles()
 
+          -- UNTHROTTLED: Input logic checked seamlessly every tick
           if hasAnyMovementInput() then
             local fwd  = eyeAng:getForward()
             local side = eyeAng:getRight()
@@ -404,15 +392,20 @@ if SERVER then
           end
 
           phys:setVelocity(FORCE_VEC)
-          phys:setAngles(eyeAng)
-          phys:setAngleVelocity(VECTOR_ZERO)
+
+          -- THROTTLED: Physics angles alignment throttled down to every 2 ticks 
+          -- This handles the massive engine drain while leaving directional movement completely smooth.
+          angleTickCount = angleTickCount + 1
+          if angleTickCount >= 2 then
+            angleTickCount = 0
+            phys:setAngles(eyeAng)
+            phys:setAngleVelocity(VECTOR_ZERO)
+          end
         end
       end
 
     ---- VEHICLE MODE -----------------------------------------------------------
     elseif isVehicleMode then
-      phys:enableMotion(true)
-
       local throttle = 0
       if ply:keyDown(IN_KEY.FORWARD) then throttle = throttle + 1 end
       if ply:keyDown(IN_KEY.BACK)    then throttle = throttle - 1 end
@@ -453,8 +446,6 @@ if SERVER then
 
     ---- OMNI / ROLL MODE -------------------------------------------------------
     else
-      phys:enableMotion(true)
-
       if hasDirectionalInput() then
         local ang   = ply:getEyeAngles()
         local fwd   = ang:getForward()
@@ -489,8 +480,6 @@ if SERVER then
     end
   end
 
-  -- POSSESSION / PROP SWITCHING
-
   local function switchPossessedProp(targetProp)
     physProp      = targetProp
     isPossessing  = true
@@ -504,7 +493,6 @@ if SERVER then
 
     local phys = physProp:getPhysicsObject()
     if isValid(phys) then
-      if not isGlideMode then phys:enableMotion(true) end
       phys:wake()
     end
 
@@ -518,12 +506,10 @@ if SERVER then
   end
 
   --------------------------------------------------------------------------------
-  -- OPTIMIZED VISIBILITY HOOK
+  -- SETUP PLAYER VISIBILITY HOOK
   --------------------------------------------------------------------------------
   hook.add("SetupPlayerVisibility", "PropDisguiseHoloHide", function(p)
     if p ~= ply or not isAlive then return end
-    
-    -- Force absolute player model invisibility during Hologram and Detached modes
     if not inPhysicsMode then
       ply:setNoDraw(true)
       ply:setRenderMode(1)
@@ -531,28 +517,22 @@ if SERVER then
     end
   end)
 
-  -- TICK: Optimized movement gateway
-
+  --------------------------------------------------------------------------------
+  -- TICK: Completely Unthrottled Movement Loops
+  --------------------------------------------------------------------------------
   hook.add("Tick", "PropPhysicsLogic", function()
     if not isAlive or not inPhysicsMode or isFrozen then return end
-    
     if not isValid(physProp) then return end
-    
+
+    -- Kept fully unthrottled for active user responsiveness across all modes
     if not isGlideMode and isValid(vehicleChair) and not isDetached then
-      local chairPhys = vehicleChair:getPhysicsObject()
-      if isValid(chairPhys) then chairPhys:enableMotion(true) end
       vehicleChair:setPos(physProp:getPos() + Vector(0, 0, 10))
       vehicleChair:setAngles(ANGLE_ZERO)
-      vehicleChair:setFrozen(true)
       
       if isValid(podController) then
         podController:setPos(physProp:getPos())
         podController:setAngles(ANGLE_ZERO)
       end
-    end
-
-    if not isGlideMode and not hasAnyMovementInput() then 
-      return 
     end
 
     handlePhysicsMovement()
@@ -582,7 +562,7 @@ if SERVER then
     end
   end)
 
-  -- Low-frequency validation checks (0.5s intervals instead of every tick)
+  -- Validation Checks (0.5s intervals)
   timer.create("PropDisguiseValidation", 0.5, 0, function()
     if not isAlive then return end
 
@@ -598,8 +578,7 @@ if SERVER then
     end
   end)
 
-  -- KEY PRESS
-
+  -- KEY PRESS INPUT
   hook.add("KeyPress", "PropDisguiseInput", function(p, key)
     if p ~= ply or not isAlive then return end
 
@@ -668,7 +647,6 @@ if SERVER then
     if key == KEY_DETACH then
       isDetached = not isDetached
       if isDetached then
-        -- Capture the current world position/angles before unparenting!
         if isValid(propHolo) then
           detachedHoloPos = propHolo:getPos()
           detachedHoloAng = propHolo:getAngles()
@@ -679,7 +657,6 @@ if SERVER then
           cachedInVehicle = false
           if isValid(physProp) and not isPossessing then isPossessing = true end
         else
-          -- Update the hologram immediately so it registers the position drop
           updateHologram()
         end
       else
@@ -693,7 +670,6 @@ if SERVER then
           end
         else
           if isValid(propHolo) then
-            -- This will now safely warp you to where you left the hologram
             ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
             updateHologram()
           end
@@ -719,8 +695,7 @@ if SERVER then
     end
   end)
 
-  -- KEY RELEASE: toggle physics mode
-
+  -- KEY RELEASE
   hook.add("KeyRelease", "PropDisguiseRelease", function(p, key)
     if p ~= ply or key ~= KEY_UNDO_CYCLE or not isAlive then return end
 
@@ -734,7 +709,6 @@ if SERVER then
   end)
 
   -- CHAT COMMANDS
-
   hook.add("PlayerSay", "PropDisguiseChat", function(talker, text)
     if talker ~= ply then return end
 
@@ -756,7 +730,6 @@ if SERVER then
   end)
 
   -- CLEANUP
-
   hook.add("removed", "CleanupDisguise", function()
     timer.remove("PropDisguiseValidation")
     cleanupProp()
