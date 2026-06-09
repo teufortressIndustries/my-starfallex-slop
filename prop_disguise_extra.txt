@@ -1,739 +1,900 @@
---@name Prop Disguise Extra
+--@name Prop Disguise Extra (Optimized)
 --@author John Doe
 --@shared
 
 --------------------------------------------------------------------------------
 -- CONFIGURATION MENU
 --------------------------------------------------------------------------------
-local ROLL_SPEED      = 25
-local VEHICLE_SPEED   = 35
-local STEERING_SPEED  = 25
-local GLIDE_SPEED     = 25
-local JUMP_HEIGHT     = 250
-local DEFAULT_MODEL   = "models/props_junk/watermelon01.mdl"
-local TAUNT_COOLDOWN  = 0
+local ROLL_SPEED = 25
+local VEHICLE_SPEED = 35
+local STEERING_SPEED = 25
+local GLIDE_SPEED = 25
+local JUMP_HEIGHT = 250
+local DEFAULT_MODEL = "models/props_junk/watermelon01.mdl"
+local TAUNT_COOLDOWN = 0
+
+-- Global interval (in ticks) for physics calculations, trace loops, and angle syncs
+local GLOBAL_THROTTLE = 3
 
 --------------------------------------------------------------------------------
 -- CONTROLS CONFIGURATION
 --------------------------------------------------------------------------------
-local KEY_UNDO_CYCLE    = IN_KEY.ALT1
-local KEY_FREEZE        = IN_KEY.ALT2
-local KEY_TOGGLE_STYLE  = IN_KEY.SPEED
-local KEY_DETACH        = IN_KEY.WALK
-local KEY_POSSESS       = IN_KEY.RELOAD
-local KEY_COPY_PROP     = IN_KEY.ZOOM
-local KEY_TAUNT         = IN_KEY.SCORE
+local KEY_UNDO_CYCLE = IN_KEY.ALT1
+local KEY_FREEZE = IN_KEY.ALT2
+local KEY_TOGGLE_STYLE = IN_KEY.SPEED
+local KEY_DETACH = IN_KEY.WALK
+local KEY_POSSESS = IN_KEY.RELOAD
+local KEY_COPY_PROP = IN_KEY.ZOOM
+local KEY_TAUNT = IN_KEY.SCORE
 
 --------------------------------------------------------------------------------
 -- TAUNT SOUNDBOARD DATA
 --------------------------------------------------------------------------------
 local TAUNT_SOUNDS = {
-  "ambient/alarms/klaxon1.wav",
-  "garrysmod/balloon_pop_cute.wav",
-  "buttons/combine_button1.wav",
-  "vo/npc/male01/answer30.wav",
-  "vo/npc/male01/hi01.wav",
-  "vo/npc/male01/behindyou01.wav",
-  "vo/npc/male01/question26.wav",
-  "friends/friend_join.wav",
-  "friends/friend_online.wav",
-  "friends/message.wav",
+    "ambient/alarms/klaxon1.wav",
+    "garrysmod/balloon_pop_cute.wav",
+    "buttons/combine_button1.wav",
+    "vo/npc/male01/answer30.wav",
+    "vo/npc/male01/hi01.wav",
+    "vo/npc/male01/behindyou01.wav",
+    "vo/npc/male01/question26.wav",
+    "friends/friend_join.wav",
+    "friends/friend_online.wav",
+    "friends/message.wav"
 }
 
 if SERVER then
-  local ply = owner()
-  local currentModel    = DEFAULT_MODEL
-  local currentSkin     = 0
-  local currentMaterial = ""
-  local currentColor    = Color(255, 255, 255, 255)
-  local currentScale    = Vector(1, 1, 1)
+    local ply = owner()
+    local currentModel = DEFAULT_MODEL
+    local currentSkin = 0
+    local currentMaterial = ""
+    local currentColor = Color(255, 255, 255, 255)
+    local currentScale = Vector(1, 1, 1)
 
-  local propHolo    = holograms.create(ply:getPos(), ply:getAngles(), currentModel)
-  local physProp    = nil
-  local vehicleChair = nil
-  local podController = nil
+    local propHolo = holograms.create(ply:getPos(), ply:getAngles(), currentModel)
+    local physProp = nil
+    local vehicleChair = nil
+    local podController = nil
 
-  local inPhysicsMode   = false
-  local isVehicleMode   = false
-  local isGlideMode     = false
-  local isPossessing    = false
-  local isDetached      = false
-  local isFrozen        = false
-  local lastJump        = 0
-  local lastTaunt       = 0
-  local isAlive         = ply:isAlive()
-  local isOutOfControl  = false
-  local controlRecoveryTime = 0
-  local glideActivateTime   = 0
+    local inPhysicsMode = false
+    local isVehicleMode = false
+    local isGlideMode = false
+    local isPossessing = false
+    local isDetached = false
+    local isFrozen = false
+    local lastJump = 0
+    local lastTaunt = 0
+    local isAlive = ply:isAlive()
+    local isOutOfControl = false
+    local controlRecoveryTime = 0
+    local glideActivateTime = 0
 
-  local holoOffsetZ     = 0
-  local detachedHoloPos = Vector(0, 0, 0)
-  local detachedHoloAng = Angle(0, 0, 0)
+    local holoOffsetZ = 0
+    local detachedHoloPos = Vector(0, 0, 0)
+    local detachedHoloAng = Angle(0, 0, 0)
 
-  -- Pre-allocated constants
-  local VECTOR_ZERO = Vector(0, 0, 0)
-  local ANGLE_ZERO  = Angle(0, 0, 0)
+    -- Pre-allocated constants
+    local VECTOR_ZERO = Vector(0, 0, 0)
+    local ANGLE_ZERO = Angle(0, 0, 0)
 
-  -- Pre-allocated reusable working vectors
-  local MOVE_VEC    = Vector(0, 0, 0)
-  local FORCE_VEC   = Vector(0, 0, 0)
-  local TRACE_END   = Vector(0, 0, 0)
+    -- Pre-allocated reusable working vectors
+    local MOVE_VEC = Vector(0, 0, 0)
+    local FORCE_VEC = Vector(0, 0, 0)
+    local TRACE_END = Vector(0, 0, 0)
 
-  -- Cached matrix for scaling
-  local SCALE_MATRIX = Matrix()
+    -- Cached matrix for scaling
+    local SCALE_MATRIX = Matrix()
 
-  -- Physics cache
-  local cachedMass      = 0
-  local cachedObbMaxZ   = 0
-  local cachedMassCenterLocal = Vector(0, 0, 0)
+    -- Physics cache
+    local cachedMass = 0
+    local cachedObbMaxZ = 0
+    local cachedMassCenterLocal = Vector(0, 0, 0)
 
-  -- Vehicle ground-trace throttle
-  local TRACE_INTERVAL  = 4
-  local traceTickCount  = 0
-  local lastGroundHit   = false
+    -- Throttling counters
+    local traceTickCount = 0
+    local angleTickCount = 0
+    local glidePosTickCount = 0
+    local lastGroundHit = false
 
-  -- Angle optimization throttle
-  local angleTickCount  = 0
+    local cachedInVehicle = false
 
-  local cachedInVehicle = false
+    ply:setModelScale(0)
 
-  ply:setModelScale(0)
+    --------------------------------------------------------------------------------
+    -- PHYSICS CACHE HELPERS
+    --------------------------------------------------------------------------------
 
-  --------------------------------------------------------------------------------
-  -- PHYSICS CACHE HELPERS
-  --------------------------------------------------------------------------------
-
-  local function refreshPhysicsCache()
-    if not isValid(physProp) then
-      cachedMass    = 0
-      cachedObbMaxZ = 0
-      cachedMassCenterLocal = VECTOR_ZERO
-      return
-    end
-    local phys = physProp:getPhysicsObject()
-    if isValid(phys) then
-      cachedMass            = phys:getMass()
-      cachedMassCenterLocal = phys:getMassCenter()
-    end
-    local maxs = physProp:obbMaxs()
-    cachedObbMaxZ = maxs.z * currentScale.z
-  end
-
-  --------------------------------------------------------------------------------
-  -- UTILITY
-  --------------------------------------------------------------------------------
-
-  local function applyVisualProperties(ent)
-    if not isValid(ent) then return end
-    ent:setSkin(currentSkin)
-    ent:setMaterial(currentMaterial)
-    ent:setRenderMode(1)
-    ent:setColor(Color(currentColor.r, currentColor.g, currentColor.b, currentColor.a))
-
-    if ent.setMatrix then
-      SCALE_MATRIX:identity()
-      SCALE_MATRIX:scale(currentScale)
-      ent:setMatrix(SCALE_MATRIX)
-    elseif ent.setScale then
-      ent:setScale(currentScale)
-    end
-  end
-
-  local function setPlayerHidden(hidden)
-    local alpha      = hidden and 0 or 255
-    local renderMode = hidden and 1 or 0
-    ply:setColor(Color(255, 255, 255, alpha))
-    ply:setRenderMode(renderMode)
-    ply:setNoDraw(hidden)
-  end
-
-  local function updateHologram()
-    if not isValid(propHolo) then return end
-
-    if inPhysicsMode then
-      propHolo:setColor(Color(0, 0, 0, 0))
-      return
+    local function refreshPhysicsCache()
+        if not isValid(physProp) then
+            cachedMass = 0
+            cachedObbMaxZ = 0
+            cachedMassCenterLocal = VECTOR_ZERO
+            return
+        end
+        local phys = physProp:getPhysicsObject()
+        if isValid(phys) then
+            cachedMass = phys:getMass()
+            cachedMassCenterLocal = phys:getMassCenter()
+        end
+        local maxs = physProp:obbMaxs()
+        cachedObbMaxZ = maxs.z * currentScale.z
     end
 
-    if isDetached then
-      propHolo:setParent(nil)
-      propHolo:setPos(detachedHoloPos)
-      propHolo:setAngles(detachedHoloAng)
-      setPlayerHidden(true) 
-    else
-      propHolo:setParent(ply)
-      propHolo:setLocalPos(Vector(0, 0, holoOffsetZ))
-      propHolo:setLocalAngles(ANGLE_ZERO)
-      setPlayerHidden(true)
-    end
-    applyVisualProperties(propHolo)
-  end
+    --------------------------------------------------------------------------------
+    -- UTILITY
+    --------------------------------------------------------------------------------
 
-  local function updateHoloOffset(callback)
-    timer.simple(0.05, function()
-      if isValid(propHolo) and propHolo.obbMins then
-        local mins = propHolo:obbMins()
-        holoOffsetZ = -mins.z * currentScale.z
-      end
-      if callback then callback() end
-    end)
-  end
+    local function applyVisualProperties(ent)
+        if not isValid(ent) then
+            return
+        end
+        ent:setSkin(currentSkin)
+        ent:setMaterial(currentMaterial)
+        ent:setRenderMode(1)
+        ent:setColor(Color(currentColor.r, currentColor.g, currentColor.b, currentColor.a))
 
-  timer.simple(0.1, function()
-    updateHoloOffset(function()
-      updateHologram()
-      print("[Prop Disguise] Loaded! Use keys or Zoom to copy props.")
-    end)
-  end)
-
-  local function cleanupProp()
-    if isValid(ply) and ply:inVehicle() then
-      ply:exitVehicle()
-    end
-    cachedInVehicle = false
-
-    if isValid(podController) then
-      podController:remove()
-      podController = nil
+        if ent.setMatrix then
+            SCALE_MATRIX:identity()
+            SCALE_MATRIX:scale(currentScale)
+            ent:setMatrix(SCALE_MATRIX)
+        elseif ent.setScale then
+            ent:setScale(currentScale)
+        end
     end
 
-    if isValid(vehicleChair) then
-      vehicleChair:remove()
-      vehicleChair = nil
+    local function setPlayerHidden(hidden)
+        local alpha = hidden and 0 or 255
+        local renderMode = hidden and 1 or 0
+        ply:setColor(Color(255, 255, 255, alpha))
+        ply:setRenderMode(renderMode)
+        ply:setNoDraw(hidden)
     end
 
-    if isValid(physProp) then
-      local mins, maxs = physProp:obbMins(), physProp:obbMaxs()
-      local safetyOffset = math.max(maxs.x - mins.x, maxs.y - mins.y) * 0.6 + 32
-      local fwd = ply:getEyeAngles():getForward()
-      fwd.z = 0
-      fwd:normalize()
-      
-      ply:setPos(physProp:getPos() - fwd * safetyOffset)
-      
-      if not isPossessing then
-        physProp:remove()
-      end
+    local function updateHologram()
+        if not isValid(propHolo) then
+            return
+        end
+
+        if inPhysicsMode then
+            propHolo:setColor(Color(0, 0, 0, 0))
+            return
+        end
+
+        if isDetached then
+            propHolo:setParent(nil)
+            propHolo:setPos(detachedHoloPos)
+            propHolo:setAngles(detachedHoloAng)
+            setPlayerHidden(true)
+        else
+            propHolo:setParent(ply)
+            propHolo:setLocalPos(Vector(0, 0, holoOffsetZ))
+            propHolo:setLocalAngles(ANGLE_ZERO)
+            setPlayerHidden(true)
+        end
+        applyVisualProperties(propHolo)
     end
 
-    physProp    = nil
-    isFrozen    = false
-    isDetached  = false
-    isPossessing = false
-
-    cachedMass            = 0
-    cachedObbMaxZ         = 0
-    cachedMassCenterLocal = VECTOR_ZERO
-
-    if isValid(propHolo) then
-      propHolo:setColor(currentColor)
-    end
-  end
-
-  local function checkAndCreateChair(targetProp)
-    if not isValid(targetProp) then return end
-
-    if not isValid(vehicleChair) then
-      vehicleChair = prop.createSent(targetProp:getPos(), ANGLE_ZERO, "Chair_Plastic", true)
-      if isValid(vehicleChair) then
-        vehicleChair:setNoDraw(true)
-        vehicleChair:setNocollideAll(true)
-      end
+    local function updateHoloOffset(callback)
+        timer.simple(
+            0.05,
+            function()
+                if isValid(propHolo) and propHolo.obbMins then
+                    local mins = propHolo:obbMins()
+                    holoOffsetZ = -mins.z * currentScale.z
+                end
+                if callback then
+                    callback()
+                end
+            end
+        )
     end
 
-    if not isValid(podController) then
-      podController = prop.createSent(targetProp:getPos(), ANGLE_ZERO, "gmod_wire_pod", true)
-      if isValid(podController) then
-        podController:setNocollideAll(true)
-        podController:setNoDraw(true)
-        
-        local podLink = podController:getWirelink()
-        podLink["Vehicle"] = vehicleChair
-        podLink["Hide Player"] = 1
-      end
-    end
-
-    if isValid(vehicleChair) and not isDetached and not cachedInVehicle then
-      ply:enterVehicle(vehicleChair)
-      cachedInVehicle = true
-    end
-  end
-
-  local function spawnProp()
-    if isValid(propHolo) then
-      propHolo:setColor(Color(currentColor.r, currentColor.g, currentColor.b, 0))
-    end
-
-    physProp = prop.create(
-      ply:getPos() + Vector(0, 0, holoOffsetZ),
-      Angle(0, ply:getAngles().y, 0),
-      currentModel
+    timer.simple(
+        0.1,
+        function()
+            updateHoloOffset(
+                function()
+                    updateHologram()
+                    print("[Prop Disguise] Loaded! Use keys or Zoom to copy props.")
+                end
+            )
+        end
     )
 
-    isPossessing = false
+    local function cleanupProp()
+        if isValid(ply) and ply:inVehicle() then
+            ply:exitVehicle()
+        end
+        cachedInVehicle = false
 
-    timer.simple(0, function()
-      if not isValid(physProp) then return end
-      applyVisualProperties(physProp)
-
-      local phys = physProp:getPhysicsObject()
-      if isValid(phys) then
-        phys:wake()
-      end
-
-      refreshPhysicsCache()
-      checkAndCreateChair(physProp)
-    end)
-  end
-
-  local function emitTauntSound(soundPath)
-    local soundSource = nil
-    if inPhysicsMode and isValid(physProp) then
-      soundSource = physProp
-    elseif not inPhysicsMode and isValid(propHolo) then
-      soundSource = propHolo
-    end
-    if isValid(soundSource) then
-      soundSource:emitSound(soundPath)
-    end
-  end
-
-  local function hasDirectionalInput()
-    return ply:keyDown(IN_KEY.FORWARD) or ply:keyDown(IN_KEY.BACK) or 
-           ply:keyDown(IN_KEY.MOVELEFT) or ply:keyDown(IN_KEY.MOVERIGHT)
-  end
-
-  local function hasAnyMovementInput()
-    return hasDirectionalInput() or ply:keyDown(IN_KEY.JUMP) or ply:keyDown(IN_KEY.DUCK)
-  end
-
-  --------------------------------------------------------------------------------
-  -- PHYSICS MOVEMENT (UNTHROTTLED POSITIONS, OPTIMIZED ANGLES)
-  --------------------------------------------------------------------------------
-
-  local function handlePhysicsMovement()
-    if not isValid(physProp) then return end
-
-    local phys = physProp:getPhysicsObject()
-    if not isValid(phys) then return end
-
-    local worldCOM = physProp:localToWorld(cachedMassCenterLocal)
-    local now = timer.curtime()
-
-    if isDetached or isFrozen then return end
-
-    ---- GLIDE MODE -------------------------------------------------------------
-    if isGlideMode then
-      if isValid(vehicleChair) then
-        local currentPos = physProp:getPos()
-        local actualVel  = phys:getVelocity()
-        local isGrabbed  = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
-
-        if isGrabbed then
-          isOutOfControl       = true
-          controlRecoveryTime  = now + 1.5
+        if isValid(podController) then
+            podController:remove()
+            podController = nil
         end
 
-        if isOutOfControl then
-          phys:enableGravity(true)
-          vehicleChair:setPos(currentPos + Vector(0, 0, 10))
-
-          if now > controlRecoveryTime and not isGrabbed then
-            isOutOfControl = false
-          end
+        if isValid(vehicleChair) then
+            vehicleChair:remove()
+            vehicleChair = nil
         end
 
-        if not isOutOfControl then
-          phys:enableGravity(false)
-          local eyeAng = ply:getEyeAngles()
+        if isValid(physProp) then
+            local mins, maxs = physProp:obbMins(), physProp:obbMaxs()
+            local safetyOffset = math.max(maxs.x - mins.x, maxs.y - mins.y) * 0.6 + 32
+            local fwd = ply:getEyeAngles():getForward()
+            fwd.z = 0
+            fwd:normalize()
 
-          -- UNTHROTTLED: Input logic checked seamlessly every tick
-          if hasAnyMovementInput() then
-            local fwd  = eyeAng:getForward()
-            local side = eyeAng:getRight()
+            ply:setPos(physProp:getPos() - fwd * safetyOffset)
 
-            MOVE_VEC.x = 0; MOVE_VEC.y = 0; MOVE_VEC.z = 0
-
-            if ply:keyDown(IN_KEY.FORWARD)   then MOVE_VEC.x = MOVE_VEC.x + fwd.x;  MOVE_VEC.y = MOVE_VEC.y + fwd.y;  MOVE_VEC.z = MOVE_VEC.z + fwd.z  end
-            if ply:keyDown(IN_KEY.BACK)      then MOVE_VEC.x = MOVE_VEC.x - fwd.x;  MOVE_VEC.y = MOVE_VEC.y - fwd.y;  MOVE_VEC.z = MOVE_VEC.z - fwd.z  end
-            if ply:keyDown(IN_KEY.MOVELEFT)  then MOVE_VEC.x = MOVE_VEC.x - side.x; MOVE_VEC.y = MOVE_VEC.y - side.y; MOVE_VEC.z = MOVE_VEC.z - side.z end
-            if ply:keyDown(IN_KEY.MOVERIGHT) then MOVE_VEC.x = MOVE_VEC.x + side.x; MOVE_VEC.y = MOVE_VEC.y + side.y; MOVE_VEC.z = MOVE_VEC.z + side.z end
-            if ply:keyDown(IN_KEY.JUMP)      then MOVE_VEC.z = MOVE_VEC.z + 0.7 end
-            if ply:keyDown(IN_KEY.DUCK)      then MOVE_VEC.z = MOVE_VEC.z - 0.7 end
-
-            local moveLen = MOVE_VEC:getLength()
-            if moveLen > 0 then
-              local invLen = 1 / moveLen
-              local chairPos = vehicleChair:getPos()
-              vehicleChair:setPos(Vector(
-                chairPos.x + MOVE_VEC.x * invLen * GLIDE_SPEED,
-                chairPos.y + MOVE_VEC.y * invLen * GLIDE_SPEED,
-                chairPos.z + MOVE_VEC.z * invLen * GLIDE_SPEED
-              ))
+            if not isPossessing then
+                physProp:remove()
             end
-          end
-
-          local chairPos = vehicleChair:getPos()
-          FORCE_VEC.x = (chairPos.x - currentPos.x) * 15
-          FORCE_VEC.y = (chairPos.y - currentPos.y) * 15
-          FORCE_VEC.z = (chairPos.z - currentPos.z - 10) * 15
-
-          if now > (glideActivateTime + 0.5) and actualVel:getDistance(FORCE_VEC) > 1200 then
-            if actualVel:getLength() < 300 then
-              vehicleChair:setPos(currentPos + Vector(0, 0, 10))
-              FORCE_VEC.x = 0; FORCE_VEC.y = 0; FORCE_VEC.z = 0
-              phys:setVelocity(FORCE_VEC)
-            else
-              isOutOfControl      = true
-              controlRecoveryTime = now + 2.0
-              phys:enableGravity(true)
-              return
-            end
-          end
-
-          phys:setVelocity(FORCE_VEC)
-
-          -- THROTTLED: Physics angles alignment throttled down to every 2 ticks 
-          -- This handles the massive engine drain while leaving directional movement completely smooth.
-          angleTickCount = angleTickCount + 1
-          if angleTickCount >= 2 then
-            angleTickCount = 0
-            phys:setAngles(eyeAng)
-            phys:setAngleVelocity(VECTOR_ZERO)
-          end
-        end
-      end
-
-    ---- VEHICLE MODE -----------------------------------------------------------
-    elseif isVehicleMode then
-      local throttle = 0
-      if ply:keyDown(IN_KEY.FORWARD) then throttle = throttle + 1 end
-      if ply:keyDown(IN_KEY.BACK)    then throttle = throttle - 1 end
-
-      local steering = 0
-      if ply:keyDown(IN_KEY.MOVELEFT)  then steering = steering + 1 end
-      if ply:keyDown(IN_KEY.MOVERIGHT) then steering = steering - 1 end
-
-      if throttle ~= 0 or steering ~= 0 then
-        local propForward = physProp:getAngles():getForward()
-        local propUp      = physProp:getAngles():getUp()
-
-        traceTickCount = traceTickCount + 1
-        if traceTickCount >= TRACE_INTERVAL then
-          traceTickCount = 0
-          TRACE_END.x = worldCOM.x
-          TRACE_END.y = worldCOM.y
-          TRACE_END.z = worldCOM.z - (cachedObbMaxZ + 10)
-
-          local groundTrace = trace.line(worldCOM, TRACE_END, {ply, physProp})
-          lastGroundHit = groundTrace.Hit
         end
 
-        if lastGroundHit then
-          if throttle ~= 0 then
-            phys:applyForceOffset(propForward * throttle * cachedMass * VEHICLE_SPEED, worldCOM)
-          end
-          if steering ~= 0 then
-            phys:applyTorque(propUp * steering * cachedMass * STEERING_SPEED)
-          end
-        end
-      end
+        physProp = nil
+        isFrozen = false
+        isDetached = false
+        isPossessing = false
 
-      if ply:keyDown(IN_KEY.JUMP) and (now - lastJump > 1) then
-        phys:applyForceCenter(Vector(0, 0, cachedMass * JUMP_HEIGHT))
-        lastJump = now
-      end
+        cachedMass = 0
+        cachedObbMaxZ = 0
+        cachedMassCenterLocal = VECTOR_ZERO
 
-    ---- OMNI / ROLL MODE -------------------------------------------------------
-    else
-      if hasDirectionalInput() then
-        local ang   = ply:getEyeAngles()
-        local fwd   = ang:getForward()
-        local right = ang:getRight()
-
-        fwd.z = 0; right.z = 0
-        FORCE_VEC.x = 0; FORCE_VEC.y = 0; FORCE_VEC.z = 0
-
-        if ply:keyDown(IN_KEY.FORWARD)   then FORCE_VEC.x = FORCE_VEC.x + fwd.x;   FORCE_VEC.y = FORCE_VEC.y + fwd.y   end
-        if ply:keyDown(IN_KEY.BACK)      then FORCE_VEC.x = FORCE_VEC.x - fwd.x;   FORCE_VEC.y = FORCE_VEC.y - fwd.y   end
-        if ply:keyDown(IN_KEY.MOVELEFT)  then FORCE_VEC.x = FORCE_VEC.x - right.x; FORCE_VEC.y = FORCE_VEC.y - right.y end
-        if ply:keyDown(IN_KEY.MOVERIGHT) then FORCE_VEC.x = FORCE_VEC.x + right.x; FORCE_VEC.y = FORCE_VEC.y + right.y end
-
-        local forceLen = FORCE_VEC:getLength()
-        if forceLen > 0 then
-          local invLen = 1 / forceLen
-          phys:applyForceOffset(
-            Vector(
-              FORCE_VEC.x * invLen * cachedMass * ROLL_SPEED,
-              FORCE_VEC.y * invLen * cachedMass * ROLL_SPEED,
-              0
-            ),
-            worldCOM
-          )
-        end
-      end
-
-      if ply:keyDown(IN_KEY.JUMP) and (now - lastJump > 1) then
-        phys:applyForceCenter(Vector(0, 0, cachedMass * JUMP_HEIGHT))
-        lastJump = now
-      end
-    end
-  end
-
-  local function switchPossessedProp(targetProp)
-    physProp      = targetProp
-    isPossessing  = true
-    inPhysicsMode = true
-    isDetached    = false
-
-    currentModel    = physProp:getModel()
-    currentSkin     = physProp:getSkin()     or 0
-    currentMaterial = physProp:getMaterial() or ""
-    currentColor    = physProp:getColor()    or Color(255, 255, 255, 255)
-
-    local phys = physProp:getPhysicsObject()
-    if isValid(phys) then
-      phys:wake()
-    end
-
-    if isValid(propHolo) then
-      propHolo:setModel(currentModel)
-      propHolo:setColor(Color(0, 0, 0, 0))
-    end
-
-    refreshPhysicsCache()
-    checkAndCreateChair(physProp)
-  end
-
-  --------------------------------------------------------------------------------
-  -- SETUP PLAYER VISIBILITY HOOK
-  --------------------------------------------------------------------------------
-  hook.add("SetupPlayerVisibility", "PropDisguiseHoloHide", function(p)
-    if p ~= ply or not isAlive then return end
-    if not inPhysicsMode then
-      ply:setNoDraw(true)
-      ply:setRenderMode(1)
-      ply:setColor(Color(0, 0, 0, 0))
-    end
-  end)
-
-  --------------------------------------------------------------------------------
-  -- TICK: Completely Unthrottled Movement Loops
-  --------------------------------------------------------------------------------
-  hook.add("Tick", "PropPhysicsLogic", function()
-    if not isAlive or not inPhysicsMode or isFrozen then return end
-    if not isValid(physProp) then return end
-
-    -- Kept fully unthrottled for active user responsiveness across all modes
-    if not isGlideMode and isValid(vehicleChair) and not isDetached then
-      vehicleChair:setPos(physProp:getPos() + Vector(0, 0, 10))
-      vehicleChair:setAngles(ANGLE_ZERO)
-      
-      if isValid(podController) then
-        podController:setPos(physProp:getPos())
-        podController:setAngles(ANGLE_ZERO)
-      end
-    end
-
-    handlePhysicsMovement()
-  end)
-
-  -- EVENT-DRIVEN STATE MANAGEMENT
-
-  hook.add("PlayerDeath", "PropDisguiseDeath", function(p)
-    if p ~= ply then return end
-    isAlive           = false
-    cachedInVehicle   = false
-    cleanupProp()
-    inPhysicsMode     = false
-    ply:setModelScale(1)
-    setPlayerHidden(false)
-    if isValid(propHolo) then propHolo:setColor(Color(255, 255, 255, 0)) end
-  end)
-
-  hook.add("PlayerSpawn", "PropDisguiseSpawn", function(p)
-    if p ~= ply then return end
-    isAlive = true
-    ply:setModelScale(0)
-    setPlayerHidden(true)
-    if isValid(propHolo) then
-      propHolo:setColor(currentColor)
-      updateHoloOffset(function() updateHologram() end)
-    end
-  end)
-
-  -- Validation Checks (0.5s intervals)
-  timer.create("PropDisguiseValidation", 0.5, 0, function()
-    if not isAlive then return end
-
-    if inPhysicsMode and not isDetached and isValid(vehicleChair) and not ply:inVehicle() then
-      ply:enterVehicle(vehicleChair)
-      cachedInVehicle = true
-    end
-
-    if inPhysicsMode and not isValid(physProp) then
-      inPhysicsMode = false
-      cleanupProp()
-      updateHologram()
-    end
-  end)
-
-  -- KEY PRESS INPUT
-  hook.add("KeyPress", "PropDisguiseInput", function(p, key)
-    if p ~= ply or not isAlive then return end
-
-    if key == KEY_COPY_PROP then
-      local tr     = ply:getEyeTrace()
-      local target = tr.Entity
-      if isValid(target) and not target:isPlayer() then
-        local modelPath = target:getModel()
-        if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
-          currentModel    = modelPath
-          currentSkin     = target:getSkin()     or 0
-          currentMaterial = target:getMaterial() or ""
-          currentColor    = target:getColor()    or Color(255, 255, 255, 255)
-
-          if isValid(propHolo) then propHolo:setModel(currentModel) end
-          updateHoloOffset(function()
-            updateHologram()
-            if inPhysicsMode then
-              cleanupProp()
-              spawnProp()
-            end
-            print("Copied appearance: " .. currentModel)
-          end)
-        end
-      end
-    end
-
-    if key == KEY_POSSESS and isDetached then
-      local tr     = ply:getEyeTrace()
-      local target = tr.Entity
-      if isValid(target) and not target:isPlayer() then
-        if hasPermission("entities.canTool", target) then
-          local modelPath = target:getModel()
-          if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
-            if isValid(podController) then podController:remove(); podController = nil end
-            if isValid(vehicleChair) then vehicleChair:remove(); vehicleChair = nil end
-            switchPossessedProp(target)
-          end
-        end
-      end
-    end
-
-    if key == KEY_TOGGLE_STYLE and inPhysicsMode then
-      if isGlideMode and isValid(physProp) then
-        local phys = physProp:getPhysicsObject()
-        if isValid(phys) then phys:enableGravity(true) end
-      end
-
-      if not isVehicleMode and not isGlideMode then
-        isVehicleMode = true
-        isGlideMode   = false
-        traceTickCount = TRACE_INTERVAL
-        print("Style: VEHICLE")
-      elseif isVehicleMode and not isGlideMode then
-        isVehicleMode = false
-        isGlideMode   = true
-        glideActivateTime = timer.curtime()
-        print("Style: GLIDE")
-      else
-        isVehicleMode = false
-        isGlideMode   = false
-        print("Style: OMNI")
-      end
-    end
-
-    if key == KEY_DETACH then
-      isDetached = not isDetached
-      if isDetached then
         if isValid(propHolo) then
-          detachedHoloPos = propHolo:getPos()
-          detachedHoloAng = propHolo:getAngles()
+            propHolo:setColor(currentColor)
+        end
+    end
+
+    local function checkAndCreateChair(targetProp)
+        if not isValid(targetProp) then
+            return
         end
 
-        if inPhysicsMode then
-          if ply:inVehicle() then ply:exitVehicle() end
-          cachedInVehicle = false
-          if isValid(physProp) and not isPossessing then isPossessing = true end
+        if not isValid(vehicleChair) then
+            vehicleChair = prop.createSent(targetProp:getPos(), ANGLE_ZERO, "Chair_Plastic", true)
+            if isValid(vehicleChair) then
+                vehicleChair:setNoDraw(true)
+                vehicleChair:setNocollideAll(true)
+            end
+        end
+
+        if not isValid(podController) then
+            podController = prop.createSent(targetProp:getPos(), ANGLE_ZERO, "gmod_wire_pod", true)
+            if isValid(podController) then
+                podController:setNocollideAll(true)
+                podController:setNoDraw(true)
+
+                local podLink = podController:getWirelink()
+                podLink["Vehicle"] = vehicleChair
+                podLink["Hide Player"] = 1
+            end
+        end
+
+        if isValid(vehicleChair) and not isDetached and not cachedInVehicle then
+            ply:enterVehicle(vehicleChair)
+            cachedInVehicle = true
+        end
+    end
+
+    local function spawnProp()
+        if isValid(propHolo) then
+            propHolo:setColor(Color(currentColor.r, currentColor.g, currentColor.b, 0))
+        end
+
+        physProp = prop.create(ply:getPos() + Vector(0, 0, holoOffsetZ), Angle(0, ply:getAngles().y, 0), currentModel)
+
+        isPossessing = false
+
+        timer.simple(
+            0,
+            function()
+                if not isValid(physProp) then
+                    return
+                end
+                applyVisualProperties(physProp)
+
+                local phys = physProp:getPhysicsObject()
+                if isValid(phys) then
+                    phys:wake()
+                end
+
+                refreshPhysicsCache()
+                checkAndCreateChair(physProp)
+            end
+        )
+    end
+
+    local function emitTauntSound(soundPath)
+        local soundSource = nil
+        if inPhysicsMode and isValid(physProp) then
+            soundSource = physProp
+        elseif not inPhysicsMode and isValid(propHolo) then
+            soundSource = propHolo
+        end
+        if isValid(soundSource) then
+            soundSource:emitSound(soundPath)
+        end
+    end
+
+    local function hasDirectionalInput()
+        return ply:keyDown(IN_KEY.FORWARD) or ply:keyDown(IN_KEY.BACK) or ply:keyDown(IN_KEY.MOVELEFT) or
+            ply:keyDown(IN_KEY.MOVERIGHT)
+    end
+
+    local function hasAnyMovementInput()
+        return hasDirectionalInput() or ply:keyDown(IN_KEY.JUMP) or ply:keyDown(IN_KEY.DUCK)
+    end
+
+    --------------------------------------------------------------------------------
+    -- PHYSICS MOVEMENT (THROTTLED OPTIMIZATIONS)
+    --------------------------------------------------------------------------------
+
+    local function handlePhysicsMovement()
+        if not isValid(physProp) then
+            return
+        end
+
+        local phys = physProp:getPhysicsObject()
+        if not isValid(phys) then
+            return
+        end
+
+        local worldCOM = physProp:localToWorld(cachedMassCenterLocal)
+        local now = timer.curtime()
+
+        if isDetached or isFrozen then
+            return
+        end
+
+        ---- GLIDE MODE -------------------------------------------------------------
+        if isGlideMode then
+            ---- VEHICLE MODE -----------------------------------------------------------
+            if isValid(vehicleChair) then
+                local currentPos = physProp:getPos()
+                local actualVel = phys:getVelocity()
+                local isGrabbed = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
+
+                if isGrabbed then
+                    isOutOfControl = true
+                    controlRecoveryTime = now + 1.5
+                end
+
+                if isOutOfControl then
+                    phys:enableGravity(true)
+                    vehicleChair:setPos(currentPos + Vector(0, 0, 10))
+
+                    if now > controlRecoveryTime and not isGrabbed then
+                        isOutOfControl = false
+                    end
+                end
+
+                if not isOutOfControl then
+                    phys:enableGravity(false)
+                    local eyeAng = ply:getEyeAngles()
+
+                    -- 1. CHAIR MOVEMENT: Kept unthrottled so keystrokes register instantly
+                    if hasAnyMovementInput() then
+                        local fwd = eyeAng:getForward()
+                        local side = eyeAng:getRight()
+
+                        MOVE_VEC.x = 0
+                        MOVE_VEC.y = 0
+                        MOVE_VEC.z = 0
+
+                        if ply:keyDown(IN_KEY.FORWARD) then
+                            MOVE_VEC.x = MOVE_VEC.x + fwd.x
+                            MOVE_VEC.y = MOVE_VEC.y + fwd.y
+                            MOVE_VEC.z = MOVE_VEC.z + fwd.z
+                        end
+                        if ply:keyDown(IN_KEY.BACK) then
+                            MOVE_VEC.x = MOVE_VEC.x - fwd.x
+                            MOVE_VEC.y = MOVE_VEC.y - fwd.y
+                            MOVE_VEC.z = MOVE_VEC.z - fwd.z
+                        end
+                        if ply:keyDown(IN_KEY.MOVELEFT) then
+                            MOVE_VEC.x = MOVE_VEC.x - side.x
+                            MOVE_VEC.y = MOVE_VEC.y - side.y
+                            MOVE_VEC.z = MOVE_VEC.z - side.z
+                        end
+                        if ply:keyDown(IN_KEY.MOVERIGHT) then
+                            MOVE_VEC.x = MOVE_VEC.x + side.x
+                            MOVE_VEC.y = MOVE_VEC.y + side.y
+                            MOVE_VEC.z = MOVE_VEC.z + side.z
+                        end
+                        if ply:keyDown(IN_KEY.JUMP) then
+                            MOVE_VEC.z = MOVE_VEC.z + 0.7
+                        end
+                        if ply:keyDown(IN_KEY.DUCK) then
+                            MOVE_VEC.z = MOVE_VEC.z - 0.7
+                        end
+
+                        local moveLen = MOVE_VEC:getLength()
+                        if moveLen > 0 then
+                            local invLen = 1 / moveLen
+                            local chairPos = vehicleChair:getPos()
+                            vehicleChair:setPos(
+                                Vector(
+                                    chairPos.x + MOVE_VEC.x * invLen * GLIDE_SPEED,
+                                    chairPos.y + MOVE_VEC.y * invLen * GLIDE_SPEED,
+                                    chairPos.z + MOVE_VEC.z * invLen * GLIDE_SPEED
+                                )
+                            )
+                        end
+                    end
+
+                    -- 2. PROP POSITION/VELOCITY THROTTLE: Only runs calculations every N ticks
+                    glidePosTickCount = glidePosTickCount + 1
+                    if glidePosTickCount >= GLOBAL_THROTTLE then
+                        glidePosTickCount = 0
+
+                        local chairPos = vehicleChair:getPos()
+                        FORCE_VEC.x = (chairPos.x - currentPos.x) * 15
+                        FORCE_VEC.y = (chairPos.y - currentPos.y) * 15
+                        FORCE_VEC.z = (chairPos.z - currentPos.z - 10) * 15
+
+                        local safetyThreshold = 1200 * GLOBAL_THROTTLE
+
+                        if now > (glideActivateTime + 0.5) and actualVel:getDistance(FORCE_VEC) > safetyThreshold then
+                            if actualVel:getLength() < 300 then
+                                vehicleChair:setPos(currentPos + Vector(0, 0, 10))
+                                FORCE_VEC.x = 0
+                                FORCE_VEC.y = 0
+                                FORCE_VEC.z = 0
+                                phys:setVelocity(FORCE_VEC)
+                            else
+                                isOutOfControl = true
+                                controlRecoveryTime = now + 2.0
+                                phys:enableGravity(true)
+                                return
+                            end
+                        end
+
+                        phys:setVelocity(FORCE_VEC)
+                    end
+
+                    -- 3. PROP ANGLE THROTTLE: Standard orientation alignment
+                    angleTickCount = angleTickCount + 1
+                    if angleTickCount >= GLOBAL_THROTTLE then
+                        angleTickCount = 0
+                        phys:setAngles(eyeAng)
+                        phys:setAngleVelocity(VECTOR_ZERO)
+                    end
+                end
+            end
+        elseif isVehicleMode then
+            ---- OMNI / ROLL MODE -------------------------------------------------------
+            local throttle = 0
+            if ply:keyDown(IN_KEY.FORWARD) then
+                throttle = throttle + 1
+            end
+            if ply:keyDown(IN_KEY.BACK) then
+                throttle = throttle - 1
+            end
+
+            local steering = 0
+            if ply:keyDown(IN_KEY.MOVELEFT) then
+                steering = steering + 1
+            end
+            if ply:keyDown(IN_KEY.MOVERIGHT) then
+                steering = steering - 1
+            end
+
+            if throttle ~= 0 or steering ~= 0 then
+                local propForward = physProp:getAngles():getForward()
+                local propUp = physProp:getAngles():getUp()
+
+                traceTickCount = traceTickCount + 1
+                if traceTickCount >= GLOBAL_THROTTLE then
+                    traceTickCount = 0
+                    TRACE_END.x = worldCOM.x
+                    TRACE_END.y = worldCOM.y
+                    TRACE_END.z = worldCOM.z - (cachedObbMaxZ + 10)
+
+                    local groundTrace = trace.line(worldCOM, TRACE_END, {ply, physProp})
+                    lastGroundHit = groundTrace.Hit
+                end
+
+                if lastGroundHit then
+                    if throttle ~= 0 then
+                        phys:applyForceOffset(propForward * throttle * cachedMass * VEHICLE_SPEED, worldCOM)
+                    end
+                    if steering ~= 0 then
+                        phys:applyTorque(propUp * steering * cachedMass * STEERING_SPEED)
+                    end
+                end
+            end
+
+            if ply:keyDown(IN_KEY.JUMP) and (now - lastJump > 1) then
+                phys:applyForceCenter(Vector(0, 0, cachedMass * JUMP_HEIGHT))
+                lastJump = now
+            end
         else
-          updateHologram()
+            if hasDirectionalInput() then
+                local ang = ply:getEyeAngles()
+                local fwd = ang:getForward()
+                local right = ang:getRight()
+
+                fwd.z = 0
+                right.z = 0
+                FORCE_VEC.x = 0
+                FORCE_VEC.y = 0
+                FORCE_VEC.z = 0
+
+                if ply:keyDown(IN_KEY.FORWARD) then
+                    FORCE_VEC.x = FORCE_VEC.x + fwd.x
+                    FORCE_VEC.y = FORCE_VEC.y + fwd.y
+                end
+                if ply:keyDown(IN_KEY.BACK) then
+                    FORCE_VEC.x = FORCE_VEC.x - fwd.x
+                    FORCE_VEC.y = FORCE_VEC.y - fwd.y
+                end
+                if ply:keyDown(IN_KEY.MOVELEFT) then
+                    FORCE_VEC.x = FORCE_VEC.x - right.x
+                    FORCE_VEC.y = FORCE_VEC.y - right.y
+                end
+                if ply:keyDown(IN_KEY.MOVERIGHT) then
+                    FORCE_VEC.x = FORCE_VEC.x + right.x
+                    FORCE_VEC.y = FORCE_VEC.y + right.y
+                end
+
+                local forceLen = FORCE_VEC:getLength()
+                if forceLen > 0 then
+                    local invLen = 1 / forceLen
+                    phys:applyForceOffset(
+                        Vector(
+                            FORCE_VEC.x * invLen * cachedMass * ROLL_SPEED,
+                            FORCE_VEC.y * invLen * cachedMass * ROLL_SPEED,
+                            0
+                        ),
+                        worldCOM
+                    )
+                end
+            end
+
+            if ply:keyDown(IN_KEY.JUMP) and (now - lastJump > 1) then
+                phys:applyForceCenter(Vector(0, 0, cachedMass * JUMP_HEIGHT))
+                lastJump = now
+            end
         end
-      else
-        if inPhysicsMode then
-          if isValid(physProp) then
-            print("Attached back to physics prop!")
-            checkAndCreateChair(physProp)
-          else
-            inPhysicsMode = false
-            updateHologram()
-          end
-        else
-          if isValid(propHolo) then
-            ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
-            updateHologram()
-          end
+    end
+
+    local function switchPossessedProp(targetProp)
+        physProp = targetProp
+        isPossessing = true
+        inPhysicsMode = true
+        isDetached = false
+
+        currentModel = physProp:getModel()
+        currentSkin = physProp:getSkin() or 0
+        currentMaterial = physProp:getMaterial() or ""
+        currentColor = physProp:getColor() or Color(255, 255, 255, 255)
+
+        local phys = physProp:getPhysicsObject()
+        if isValid(phys) then
+            phys:wake()
         end
-      end
+
+        if isValid(propHolo) then
+            propHolo:setModel(currentModel)
+            propHolo:setColor(Color(0, 0, 0, 0))
+        end
+
+        refreshPhysicsCache()
+        checkAndCreateChair(physProp)
     end
 
-    if key == KEY_FREEZE and isValid(physProp) then
-      local phys = physProp:getPhysicsObject()
-      if isValid(phys) then
-        isFrozen = not isFrozen
-        phys:enableMotion(not isFrozen)
-        if not isFrozen then phys:wake() end
-      end
-    end
+    --------------------------------------------------------------------------------
+    -- SETUP PLAYER VISIBILITY HOOK
+    --------------------------------------------------------------------------------
+    hook.add(
+        "SetupPlayerVisibility",
+        "PropDisguiseHoloHide",
+        function(p)
+            if p ~= ply or not isAlive then
+                return
+            end
+            if not inPhysicsMode then
+                ply:setNoDraw(true)
+                ply:setRenderMode(1)
+                ply:setColor(Color(0, 0, 0, 0))
+            end
+        end
+    )
 
-    if key == KEY_TAUNT then
-      local now = timer.curtime()
-      if (now - lastTaunt) >= TAUNT_COOLDOWN then
-        emitTauntSound(TAUNT_SOUNDS[math.random(1, #TAUNT_SOUNDS)])
-        lastTaunt = now
-      end
-    end
-  end)
+    --------------------------------------------------------------------------------
+    -- TICK: Completely Unthrottled Movement Loops
+    --------------------------------------------------------------------------------
+    hook.add(
+        "Tick",
+        "PropPhysicsLogic",
+        function()
+            if not isAlive or not inPhysicsMode or isFrozen then
+                return
+            end
+            if not isValid(physProp) then
+                return
+            end
 
-  -- KEY RELEASE
-  hook.add("KeyRelease", "PropDisguiseRelease", function(p, key)
-    if p ~= ply or key ~= KEY_UNDO_CYCLE or not isAlive then return end
+            -- Kept fully unthrottled for active user responsiveness across all modes
+            if not isGlideMode and isValid(vehicleChair) and not isDetached then
+                vehicleChair:setPos(physProp:getPos() + Vector(0, 0, 10))
+                vehicleChair:setAngles(ANGLE_ZERO)
 
-    inPhysicsMode = not inPhysicsMode
-    cleanupProp()
-    if inPhysicsMode then
-      spawnProp()
-    else
-      updateHologram()
-    end
-  end)
+                if isValid(podController) then
+                    podController:setPos(physProp:getPos())
+                    podController:setAngles(ANGLE_ZERO)
+                end
+            end
 
-  -- CHAT COMMANDS
-  hook.add("PlayerSay", "PropDisguiseChat", function(talker, text)
-    if talker ~= ply then return end
+            handlePhysicsMovement()
+        end
+    )
 
-    if text:sub(1, 6):lower() == "!prop " then
-      local modelPath = text:sub(7):trim()
-      if modelPath and modelPath ~= "" then
-        currentModel = modelPath
-        if isValid(propHolo) then propHolo:setModel(currentModel) end
-        updateHoloOffset(function()
-          updateHologram()
-          if inPhysicsMode then
+    -- EVENT-DRIVEN STATE MANAGEMENT
+
+    hook.add(
+        "PlayerDeath",
+        "PropDisguiseDeath",
+        function(p)
+            if p ~= ply then
+                return
+            end
+            isAlive = false
+            cachedInVehicle = false
             cleanupProp()
-            spawnProp()
-          end
-        end)
-      end
-      return ""
-    end
-  end)
+            inPhysicsMode = false
+            ply:setModelScale(1)
+            setPlayerHidden(false)
+            if isValid(propHolo) then
+                propHolo:setColor(Color(255, 255, 255, 0))
+            end
+        end
+    )
 
-  -- CLEANUP
-  hook.add("removed", "CleanupDisguise", function()
-    timer.remove("PropDisguiseValidation")
-    cleanupProp()
-    ply:setModelScale(1)
-    setPlayerHidden(false)
-  end)
+    hook.add(
+        "PlayerSpawn",
+        "PropDisguiseSpawn",
+        function(p)
+            if p ~= ply then
+                return
+            end
+            isAlive = true
+            ply:setModelScale(0)
+            setPlayerHidden(true)
+            if isValid(propHolo) then
+                propHolo:setColor(currentColor)
+                updateHoloOffset(
+                    function()
+                        updateHologram()
+                    end
+                )
+            end
+        end
+    )
+
+    -- Validation Checks (0.5s intervals)
+    timer.create(
+        "PropDisguiseValidation",
+        0.5,
+        0,
+        function()
+            if not isAlive then
+                return
+            end
+
+            if inPhysicsMode and not isDetached and isValid(vehicleChair) and not ply:inVehicle() then
+                ply:enterVehicle(vehicleChair)
+                cachedInVehicle = true
+            end
+
+            if inPhysicsMode and not isValid(physProp) then
+                inPhysicsMode = false
+                cleanupProp()
+                updateHologram()
+            end
+        end
+    )
+
+    -- KEY PRESS INPUT
+    hook.add(
+        "KeyPress",
+        "PropDisguiseInput",
+        function(p, key)
+            if p ~= ply or not isAlive then
+                return
+            end
+
+            if key == KEY_COPY_PROP then
+                local tr = ply:getEyeTrace()
+                local target = tr.Entity
+                if isValid(target) and not target:isPlayer() then
+                    local modelPath = target:getModel()
+                    if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
+                        currentModel = modelPath
+                        currentSkin = target:getSkin() or 0
+                        currentMaterial = target:getMaterial() or ""
+                        currentColor = target:getColor() or Color(255, 255, 255, 255)
+
+                        if isValid(propHolo) then
+                            propHolo:setModel(currentModel)
+                        end
+                        updateHoloOffset(
+                            function()
+                                updateHologram()
+                                if inPhysicsMode then
+                                    cleanupProp()
+                                    spawnProp()
+                                end
+                                print("Copied appearance: " .. currentModel)
+                            end
+                        )
+                    end
+                end
+            end
+
+            if key == KEY_POSSESS and isDetached then
+                local tr = ply:getEyeTrace()
+                local target = tr.Entity
+                if isValid(target) and not target:isPlayer() then
+                    if hasPermission("entities.canTool", target) then
+                        local modelPath = target:getModel()
+                        if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
+                            if isValid(podController) then
+                                podController:remove()
+                                podController = nil
+                            end
+                            if isValid(vehicleChair) then
+                                vehicleChair:remove()
+                                vehicleChair = nil
+                            end
+                            switchPossessedProp(target)
+                        end
+                    end
+                end
+            end
+
+            if key == KEY_TOGGLE_STYLE and inPhysicsMode then
+                if isGlideMode and isValid(physProp) then
+                    local phys = physProp:getPhysicsObject()
+                    if isValid(phys) then
+                        phys:enableGravity(true)
+                    end
+                end
+
+                if not isVehicleMode and not isGlideMode then
+                    isVehicleMode = true
+                    isGlideMode = false
+                    traceTickCount = GLOBAL_THROTTLE
+                    print("Style: VEHICLE")
+                elseif isVehicleMode and not isGlideMode then
+                    isVehicleMode = false
+                    isGlideMode = true
+                    glideActivateTime = timer.curtime()
+                    print("Style: GLIDE")
+                else
+                    isVehicleMode = false
+                    isGlideMode = false
+                    print("Style: OMNI")
+                end
+            end
+
+            if key == KEY_DETACH then
+                isDetached = not isDetached
+                if isDetached then
+                    if isValid(propHolo) then
+                        detachedHoloPos = propHolo:getPos()
+                        detachedHoloAng = propHolo:getAngles()
+                    end
+
+                    if inPhysicsMode then
+                        if ply:inVehicle() then
+                            ply:exitVehicle()
+                        end
+                        cachedInVehicle = false
+                        if isValid(physProp) and not isPossessing then
+                            isPossessing = true
+                        end
+                    else
+                        updateHologram()
+                    end
+                else
+                    if inPhysicsMode then
+                        if isValid(physProp) then
+                            print("Attached back to physics prop!")
+                            checkAndCreateChair(physProp)
+                        else
+                            inPhysicsMode = false
+                            updateHologram()
+                        end
+                    else
+                        if isValid(propHolo) then
+                            ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
+                            updateHologram()
+                        end
+                    end
+                end
+            end
+
+            if key == KEY_FREEZE and isValid(physProp) then
+                local phys = physProp:getPhysicsObject()
+                if isValid(phys) then
+                    isFrozen = not isFrozen
+                    phys:enableMotion(not isFrozen)
+                    if not isFrozen then
+                        phys:wake()
+                    end
+                end
+            end
+
+            if key == KEY_TAUNT then
+                local now = timer.curtime()
+                if (now - lastTaunt) >= TAUNT_COOLDOWN then
+                    emitTauntSound(TAUNT_SOUNDS[math.random(1, #TAUNT_SOUNDS)])
+                    lastTaunt = now
+                end
+            end
+        end
+    )
+
+    -- KEY RELEASE
+    hook.add(
+        "KeyRelease",
+        "PropDisguiseRelease",
+        function(p, key)
+            if p ~= ply or key ~= KEY_UNDO_CYCLE or not isAlive then
+                return
+            end
+
+            inPhysicsMode = not inPhysicsMode
+            cleanupProp()
+            if inPhysicsMode then
+                spawnProp()
+            else
+                updateHologram()
+            end
+        end
+    )
+
+    -- CHAT COMMANDS
+    hook.add(
+        "PlayerSay",
+        "PropDisguiseChat",
+        function(talker, text)
+            if talker ~= ply then
+                return
+            end
+
+            if text:sub(1, 6):lower() == "!prop " then
+                local modelPath = text:sub(7):trim()
+                if modelPath and modelPath ~= "" then
+                    currentModel = modelPath
+                    if isValid(propHolo) then
+                        propHolo:setModel(currentModel)
+                    end
+                    updateHoloOffset(
+                        function()
+                            updateHologram()
+                            if inPhysicsMode then
+                                cleanupProp()
+                                spawnProp()
+                            end
+                        end
+                    )
+                end
+                return ""
+            end
+        end
+    )
+
+    -- CLEANUP
+    hook.add(
+        "removed",
+        "CleanupDisguise",
+        function()
+            timer.remove("PropDisguiseValidation")
+            cleanupProp()
+            ply:setModelScale(1)
+            setPlayerHidden(false)
+        end
+    )
 end
