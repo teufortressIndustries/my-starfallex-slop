@@ -1,0 +1,227 @@
+--@name Healing Station
+--@author John Doe
+--@shared
+
+-- ============================================================================
+--                                CONFIGURATION
+-- ============================================================================
+local CONFIG = {
+    -- Core Settings
+    MaxRange        = 300,               -- Max distance (units) before the lock breaks
+    ActivationKey   = IN_KEY.ATTACK,     -- The key used to lock/unlock targets
+    
+    -- Healing Thresholds & Rates
+    MaxHealth       = 100,               -- Health cap for targets
+    MaxArmor        = 100,               -- Armor cap for targets
+    HealthTickRate  = 0.8,               -- Cooldown (seconds) between health kit spawns
+    ArmorTickRate   = 0.8,               -- Cooldown (seconds) between armor battery spawns
+    
+    -- Entities to Spawn
+    HealthEntity    = "item_healthkit",  -- Entity spawned for health restoration
+    ArmorEntity     = "item_battery",    -- Entity spawned for armor restoration
+    
+    -- Audio Settings (Sound Path, Sound Level/Radius, Pitch, Volume)
+    SoundDeny       = { path = "items/suitchargeno1.wav", level = 60, pitch = 100, volume = 0.3 },
+    SoundHealthLoop = { path = "items/medcharge4.wav",    level = 60, pitch = 100, volume = 0.2 },
+    SoundArmorLoop  = { path = "items/suitcharge1.wav",   level = 60, pitch = 100, volume = 0.2 },
+    
+    -- HUD Styling (Client Side Only)
+    HUD = {
+        Width       = 220,
+        Height      = 110,
+        OffsetY     = 150,               -- Vertical offset from the screen center
+        FontName    = "Verdana",
+        FontSize    = 18,
+        FontWeight  = 800,
+        
+        -- Colors
+        BgColor     = Color(20, 20, 20, 180),
+        TextColor   = Color(50, 255, 150),
+        LockedColor = Color(255, 200, 0),
+        HoverColor  = Color(150, 150, 150),
+        HealthColor = Color(255, 75, 75),
+        ArmorColor  = Color(75, 150, 255)
+    }
+}
+-- ============================================================================
+
+if SERVER then
+    -- ==========================================
+    -- SERVER SIDE LOGIC
+    -- ==========================================
+    local cooldowns = {}
+    local activeLoops = {} 
+    local lockedTargets = {} 
+    local lastAttackState = {} 
+    local sessionDenyPlayed = {} -- Tracks if the deny sound has been played during the current lock attempt
+
+    hook.add("think", "", function()
+        local attacker = owner()
+        if not attacker:isValid() or not attacker:isAlive() then return end
+
+        local attackerID = attacker:entIndex()
+        local currentSound = activeLoops[attackerID]
+        local desiredSound = nil
+
+        local isAttacking = attacker:keyDown(CONFIG.ActivationKey)
+        local wasAttacking = lastAttackState[attackerID] or false
+        lastAttackState[attackerID] = isAttacking
+
+        -- Detect a single click (on key down)
+        if isAttacking and not wasAttacking then
+            -- Reset the session deny flag because a completely new locking attempt has started
+            sessionDenyPlayed[attackerID] = false
+
+            local traceResult = trace.line(attacker:getEyePos(), attacker:getEyePos() + attacker:getAimVector() * CONFIG.MaxRange, {attacker})
+            local ent = traceResult.Entity
+
+            if ent and ent:isValid() and ent:isPlayer() and ent:isAlive() and ent ~= attacker then
+                if lockedTargets[attackerID] == ent then
+                    lockedTargets[attackerID] = nil
+                else
+                    lockedTargets[attackerID] = ent
+                end
+            else
+                lockedTargets[attackerID] = nil
+            end
+        end
+
+        -- Handle processing for the locked target
+        local target = lockedTargets[attackerID]
+        if target and target:isValid() and target:isPlayer() and target:isAlive() then
+            
+            -- Range check
+            local distance = attacker:getPos():getDistance(target:getPos())
+            if distance > CONFIG.MaxRange then
+                lockedTargets[attackerID] = nil
+            else
+                local targetID = target:entIndex()
+                local targetPos = target:getPos()
+
+                if not cooldowns[targetID] then 
+                    cooldowns[targetID] = { health = 0, armor = 0, deny = 0 } 
+                end
+
+                local curTime = timer.curtime()
+                
+                if target:getHealth() >= CONFIG.MaxHealth and target:getArmor() >= CONFIG.MaxArmor then
+                    -- Check the attacker's locking session instead of the target's unique table
+                    if not sessionDenyPlayed[attackerID] then
+                        local snd = CONFIG.SoundDeny
+                        attacker:emitSound(snd.path, snd.level, snd.pitch, snd.volume)
+                        sessionDenyPlayed[attackerID] = true
+                    end
+
+                elseif target:getHealth() < CONFIG.MaxHealth and prop.canSpawn() then
+                    desiredSound = CONFIG.SoundHealthLoop.path
+                    sessionDenyPlayed[attackerID] = false -- Resetting allows another deny if they fill up mid-session and you try again
+                    
+                    if curTime >= cooldowns[targetID].health then
+                        prop.createSent(targetPos, Angle(0), CONFIG.HealthEntity)
+                        cooldowns[targetID].health = curTime + CONFIG.HealthTickRate
+                    end
+                
+                elseif target:getArmor() < CONFIG.MaxArmor and prop.canSpawn() then
+                    desiredSound = CONFIG.SoundArmorLoop.path
+                    sessionDenyPlayed[attackerID] = false 
+                    
+                    if curTime >= cooldowns[targetID].armor then
+                        prop.createSent(targetPos, Angle(0), CONFIG.ArmorEntity)
+                        cooldowns[targetID].armor = curTime + CONFIG.ArmorTickRate
+                    end
+                end
+            end
+        else
+            lockedTargets[attackerID] = nil
+        end
+
+        -- Dynamic Sound Manager
+        if desiredSound ~= currentSound then
+            if currentSound then
+                attacker:stopSound(currentSound)
+            end
+
+            if desiredSound then
+                local snd = (desiredSound == CONFIG.SoundHealthLoop.path) and CONFIG.SoundHealthLoop or CONFIG.SoundArmorLoop
+                attacker:emitSound(snd.path, snd.level, snd.pitch, snd.volume)
+            end
+
+            activeLoops[attackerID] = desiredSound
+        end
+    end)
+
+else
+    -- ==========================================
+    -- CLIENT SIDE LOGIC
+    -- ==========================================
+    if player() == owner() then
+        enableHud(owner(), true)
+    end
+
+    local font = render.createFont(CONFIG.HUD.FontName, CONFIG.HUD.FontSize, CONFIG.HUD.FontWeight, true)
+    
+    local clientLockedTarget = nil
+    local lastClientAttack = false
+
+    hook.add("drawhud", "MedigunHUD", function()
+        local ply = player()
+        if ply ~= owner() then return end
+        
+        local isAttacking = ply:keyDown(CONFIG.ActivationKey)
+        local traceResult = trace.line(ply:getEyePos(), ply:getEyePos() + ply:getAimVector() * CONFIG.MaxRange, {ply})
+        local aimedEnt = traceResult.Entity
+
+        if isAttacking and not lastClientAttack then
+            if aimedEnt and aimedEnt:isValid() and aimedEnt:isPlayer() and aimedEnt:isAlive() and aimedEnt ~= ply then
+                if clientLockedTarget == aimedEnt then clientLockedTarget = nil else clientLockedTarget = aimedEnt end
+            else
+                clientLockedTarget = nil
+            end
+        end
+        lastClientAttack = isAttacking
+
+        if clientLockedTarget and (not clientLockedTarget:isValid() or not clientLockedTarget:isAlive() or ply:getPos():getDistance(clientLockedTarget:getPos()) > CONFIG.MaxRange) then
+            clientLockedTarget = nil
+        end
+
+        local target = clientLockedTarget
+        local isCurrentlyLocked = (target ~= nil)
+
+        if not target then
+            if aimedEnt and aimedEnt:isValid() and aimedEnt:isPlayer() and aimedEnt:isAlive() and aimedEnt ~= ply then
+                target = aimedEnt
+            end
+        end
+
+        if not target then return end
+
+        local scrW, scrH = render.getGameResolution()
+        local boxW = CONFIG.HUD.Width
+        local boxH = CONFIG.HUD.Height
+
+        local boxX = (scrW / 2) - (boxW / 2)
+        local boxY = (scrH / 2) - (boxH / 2) + CONFIG.HUD.OffsetY
+
+        render.setColor(CONFIG.HUD.BgColor)
+        render.drawRect(boxX, boxY, boxW, boxH)
+
+        render.setFont(font)
+
+        if isCurrentlyLocked then
+            render.setColor(CONFIG.HUD.LockedColor)
+            render.drawText(boxX + 15, boxY + 10, "LOCKED ON")
+        else
+            render.setColor(CONFIG.HUD.HoverColor)
+            render.drawText(boxX + 15, boxY + 10, "Hovering Target...")
+        end
+
+        render.setColor(CONFIG.HUD.TextColor)
+        render.drawText(boxX + 15, boxY + 32, "Target: " .. target:getName())
+
+        render.setColor(CONFIG.HUD.HealthColor)
+        render.drawText(boxX + 15, boxY + 58, "Health: " .. target:getHealth())
+
+        render.setColor(CONFIG.HUD.ArmorColor)
+        render.drawText(boxX + 15, boxY + 84, "Armor: " .. target:getArmor())
+    end)
+end
