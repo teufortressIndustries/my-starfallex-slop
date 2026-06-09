@@ -2,27 +2,25 @@
 my starfallex gmod slop scripts
 
 ## [prop_disguise_extra.txt](https://github.com/teufortressIndustries/my-starfallex-slop/blob/main/prop_disguise_extra.txt)
-An advanced prop disguise script featuring multiple handling styles, a visual history stack, dynamic physical attachments, and a soundboard.
+An optimized, event-driven prop disguise script utilizing low-frequency validation timers instead of expensive processing loops. Features integrated invisible vehicle seating, standalone movement nodes, and a responsive client soundboard gateway.
 
 ### Controls
 * **WASD**: Move / Roll / Fly around.
 * **Space**: Jump (Omni & Vehicle modes) / Fly Upward (Glide mode).
 * **Duck (Ctrl)**: Fly Downward (Glide mode).
 * **Zoom Key (Z)**: Copy the model, skin, material, and color of the prop you are looking at.
-* **ALT1**: Toggle between **Hologram** and **Physical** modes (Hold for 0.4 seconds). 
-    * *Tap ALT1*: Undo / swap backward through your possessed prop history.
-    * *Tap Duck + ALT1*: Redo / swap forward through your possessed prop history.
-* **ALT2**: Freeze or unfreeze your physical prop in place.
-* **Sprint (Shift)**: Cycle through handling styles: **Omni** (Classic ball rolling) -> **Vehicle** (Throttle & steering) -> **Glide** (Smooth noclip guidepoint tracking).
-* **Walk (Alt)**: Detach from your prop to roam freely, or attach back to it.
-* **Reload (R)**: Possess the prop in your crosshair while detached.
-* **Scoreboard (TAB)**: Play a random audio taunt from the configured soundboard.
+* **ALT1 (Tap)**: Toggle completely between **Hologram (Client)** and **Physical (Server)** modes.
+* **ALT2**: Freeze or unfreeze your physical prop physics body in place.
+* **Sprint (Shift)**: Cycle handling styles: **Omni** (Classic ball rolling) -> **Vehicle** (Torque-based throttle & steering) -> **Glide** (Smooth noclip guidepoint tracking).
+* **Walk (Alt)**: Detach from your prop to roam freely (leaves hologram/prop behind), or attach back to sync up with it.
+* **Reload (R)**: Possess the custom unowned prop in your crosshair while detached.
+* **Scoreboard (TAB)**: Play a random audio taunt from the script configuration array.
 
-* **Note**: For ALT1 and ALT2 keys to work, you have to bind them first in console.
-* Example: `bind / +alt2` < binds your slash key to ALT2
+> ⚠️ **Note**: For ALT1 and ALT2 keys to register, you must bind them to standard execution keys first via your developer console.
+> * *Example:* `bind . +alt1` and `bind / +alt2`
 
 ### Chat Commands
-You can change your appearance directly via text chat:
+You can forcefully change your active model path directly via text chat:
 * `!prop models/props_junk/watermelon01.mdl`
 
 ---
