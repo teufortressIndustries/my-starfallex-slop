@@ -5,12 +5,12 @@
 --------------------------------------------------------------------------------
 -- CONFIGURATION MENU (Adjust settings easily here!)
 --------------------------------------------------------------------------------
-local ROLL_SPEED   = 25 -- How fast you roll around in regular Omni Mode
+local ROLL_SPEED    = 25 -- How fast you roll around in regular Omni Mode
 local VEHICLE_SPEED = 35 -- How fast you move forward/backward in Vehicle Mode
 local STEERING_SPEED = 25  -- How fast you turn left/right in Vehicle Mode
-local GLIDE_SPEED  = 25 -- How fast the guidepoint moves in Glide Mode
-local GLIDE_LERP   = 0.1 -- How smoothly the prop glides to the chair (0.1 = 10% per frame)
-local JUMP_HEIGHT  = 250  -- How high you can jump as a prop
+local GLIDE_SPEED   = 25 -- How fast the guidepoint moves in Glide Mode
+local GLIDE_LERP    = 0.1 -- How smoothly the prop glides to the chair (0.1 = 10% per frame)
+local JUMP_HEIGHT   = 250  -- How high you can jump as a prop
 local DEFAULT_MODEL = "models/props_junk/watermelon01.mdl" -- Starting prop
 local TAUNT_COOLDOWN = 0   -- Cooldown in seconds between taunts
 
@@ -23,7 +23,7 @@ local KEY_TOGGLE_STYLE = IN_KEY.SPEED   -- Cycle handling style (Omni -> Vehicle
 local KEY_DETACH   = IN_KEY.WALK   -- Detach from prop / Attach back to it
 local KEY_POSSESS   = IN_KEY.RELOAD  -- Crosshair trace possess while detached
 local KEY_COPY_PROP  = IN_KEY.ZOOM   -- Copy model of prop you are looking at
-local KEY_TAUNT    = IN_KEY.SCORE  -- TAB Key to play random sounds
+local KEY_TAUNT     = IN_KEY.SCORE  -- TAB Key to play random sounds
 
 --------------------------------------------------------------------------------
 -- TAUNT SOUNDBOARD DATA
@@ -154,6 +154,7 @@ if SERVER then
     updateHoloOffset(function()
       updateHologram()
       print("[Prop Disguise] Loaded! Use keys or Zoom to copy props.")
+      print("[Soundboard] Type !taunts or !sb in chat to view your sound menu!")
     end)
   end)
 
@@ -229,6 +230,20 @@ if SERVER then
       checkAndCreateChair(physProp)
       print("Physical Prop Disguise Spawned.")
     end)
+  end
+
+  -- Shared implementation for firing a taunt sound source
+  local function emitTauntSound(soundPath)
+    local soundSource = nil
+    if inPhysicsMode and isValid(physProp) then
+      soundSource = physProp
+    elseif not inPhysicsMode and isValid(propHolo) then
+      soundSource = propHolo
+    end
+
+    if isValid(soundSource) then
+      soundSource:emitSound(soundPath)
+    end
   end
 
   local function handlePhysicsMovement()
@@ -346,6 +361,7 @@ if SERVER then
             targetVelocity = actualVel * 0.5 -- Retain half of the impact bounce momentum smoothly
           end
 
+          -- [RESTORED] Apply computed physics alterations to the parent object
           phys:setVelocity(targetVelocity)
 
           -- Safe Angular interpolation logic using math.lerpAngle
@@ -521,23 +537,14 @@ if SERVER then
       print("Your physical disguise was DESTROYED! Reverting to Hologram Mode.")
     end
 
+    -- Regular Hotkey Taunt Handler (Plays Random Sound)
     local isTaunting = ply:keyDown(KEY_TAUNT)
     if isTaunting and not wasTaunting then
       local currentTime = timer.curtime()
       if (currentTime - lastTaunt) >= TAUNT_COOLDOWN then
         local randomSound = TAUNT_SOUNDS[math.random(1, #TAUNT_SOUNDS)]
-
-        local soundSource = nil
-        if inPhysicsMode and isValid(physProp) then
-          soundSource = physProp
-        elseif not inPhysicsMode and isValid(propHolo) then
-          soundSource = propHolo
-        end
-
-        if isValid(soundSource) then
-          soundSource:emitSound(randomSound)
-          lastTaunt = currentTime
-        end
+        emitTauntSound(randomSound)
+        lastTaunt = currentTime
       else
         local timeLeft = math.ceil(TAUNT_COOLDOWN - (currentTime - lastTaunt))
         print("Taunt on cooldown! Wait " .. timeLeft .. "s.")
@@ -749,6 +756,9 @@ if SERVER then
 
   hook.add("PlayerSay", "PropDisguiseChat", function(talker, text, teamChat)
     if talker ~= ply then return end
+    local lowerText = text:lower()
+
+    -- 1. MODEL CONFIGURATION COMMAND
     if text:sub(1, 6):lower() == "!prop " then
       local modelPath = text:sub(7):trim()
       if modelPath and modelPath ~= "" then
@@ -764,6 +774,37 @@ if SERVER then
         end)
       else
         print("Error: Model path cannot be empty.")
+      end
+      return ""
+    end
+
+    -- 2. SOUNDBOARD MENU DISPLAY
+    if lowerText == "!taunts" or lowerText == "!sb" then
+      print("\n--- [ TAUNT SOUNDBOARD MENU ] ---")
+      print("Type: !taunt <ID> (e.g., !taunt 2) to play a sound directly.\n")
+      for idx, path in ipairs(TAUNT_SOUNDS) do
+        -- Truncate paths cleanly for better console scannability
+        local cleanName = path:match("([^/]+)%.%w+$") or path
+        print(string.format("[%d] -> %s", idx, cleanName))
+      end
+      print("---------------------------------")
+      return ""
+    end
+
+    -- 3. SPECIFIC SOUND SELECTION FIRED FROM MENU
+    if text:sub(1, 7):lower() == "!taunt " then
+      local soundID = tonumber(text:sub(8):trim())
+      if soundID and TAUNT_SOUNDS[soundID] then
+        local currentTime = timer.curtime()
+        if (currentTime - lastTaunt) >= TAUNT_COOLDOWN then
+          emitTauntSound(TAUNT_SOUNDS[soundID])
+          lastTaunt = currentTime
+        else
+          local timeLeft = math.ceil(TAUNT_COOLDOWN - (currentTime - lastTaunt))
+          print("Soundboard is on cooldown! Wait " .. timeLeft .. "s.")
+        end
+      else
+        print("Invalid Taunt ID! Use !taunts to see the numbered menu.")
       end
       return ""
     end
