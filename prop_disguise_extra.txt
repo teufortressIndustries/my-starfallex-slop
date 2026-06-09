@@ -668,10 +668,19 @@ if SERVER then
     if key == KEY_DETACH then
       isDetached = not isDetached
       if isDetached then
+        -- Capture the current world position/angles before unparenting!
+        if isValid(propHolo) then
+          detachedHoloPos = propHolo:getPos()
+          detachedHoloAng = propHolo:getAngles()
+        end
+
         if inPhysicsMode then
           if ply:inVehicle() then ply:exitVehicle() end
           cachedInVehicle = false
           if isValid(physProp) and not isPossessing then isPossessing = true end
+        else
+          -- Update the hologram immediately so it registers the position drop
+          updateHologram()
         end
       else
         if inPhysicsMode then
@@ -684,6 +693,7 @@ if SERVER then
           end
         else
           if isValid(propHolo) then
+            -- This will now safely warp you to where you left the hologram
             ply:setPos(detachedHoloPos - Vector(0, 0, holoOffsetZ))
             updateHologram()
           end
