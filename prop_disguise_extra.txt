@@ -3,28 +3,30 @@
 --@shared
 
 --------------------------------------------------------------------------------
---  CONFIGURATION MENU (Adjust settings easily here!)
+--   CONFIGURATION MENU (Adjust settings easily here!)
 --------------------------------------------------------------------------------
 local ROLL_SPEED      = 25   -- How fast you roll around in regular Omni Mode
 local VEHICLE_SPEED   = 35   -- How fast you move forward/backward in Vehicle Mode
 local STEERING_SPEED  = 25    -- How fast you turn left/right in Vehicle Mode
+local GLIDE_SPEED     = 12   -- How fast the guidepoint moves in Glide Mode
+local GLIDE_LERP      = 0.1  -- How smoothly the prop glides to the chair (0.1 = 10% per frame)
 local JUMP_HEIGHT     = 250    -- How high you can jump as a prop
 local DEFAULT_MODEL   = "models/props_junk/watermelon01.mdl" -- Starting prop
 local TAUNT_COOLDOWN  = 0      -- Cooldown in seconds between taunts
 
 --------------------------------------------------------------------------------
---  CONTROLS CONFIGURATION (Rebind your keys easily here!)
+--   CONTROLS CONFIGURATION (Rebind your keys easily here!)
 --------------------------------------------------------------------------------
 local KEY_UNDO_CYCLE   = IN_KEY.ALT1      -- Toggle Holo Mode / Cycle possessed props (Duck+ALT1 to cycle forward)
 local KEY_FREEZE       = IN_KEY.ALT2      -- Freeze / Unfreeze your prop in place
-local KEY_TOGGLE_STYLE = IN_KEY.SPEED     -- Change rolling style (Omni vs Vehicle)
+local KEY_TOGGLE_STYLE = IN_KEY.SPEED      -- Cycle handling style (Omni -> Vehicle -> Glide)
 local KEY_DETACH       = IN_KEY.WALK      -- Detach from prop / Attach back to it
 local KEY_POSSESS      = IN_KEY.RELOAD    -- Crosshair trace possess while detached
 local KEY_COPY_PROP    = IN_KEY.ZOOM      -- Copy model of prop you are looking at
 local KEY_TAUNT        = IN_KEY.SCORE     -- TAB Key to play random sounds
 
 --------------------------------------------------------------------------------
---  TAUNT SOUNDBOARD DATA
+--   TAUNT SOUNDBOARD DATA
 --------------------------------------------------------------------------------
 local TAUNT_SOUNDS = {
     "ambient/alarms/klaxon1.wav",
@@ -57,6 +59,7 @@ if SERVER then
 
     local inPhysicsMode = false
     local isVehicleMode = false 
+    local isGlideMode = false   -- New handling mode state
     local isPossessing = false 
     local isDetached = false 
     local wasReloading = false
@@ -231,10 +234,21 @@ if SERVER then
         local phys = physProp:getPhysicsObject()
         if not isValid(phys) then return end
 
+        -- Freeze management based on mode
         if isValid(vehicleChair) then
-            vehicleChair:setPos(physProp:getPos()+Vector(0,0,10))
-            vehicleChair:setAngles(Angle(0))
-            vehicleChair:setFrozen(true)
+            local chairPhys = vehicleChair:getPhysicsObject()
+            if isGlideMode then
+                -- Disable gravity and motion quirks on the chair object entirely during flight
+                if isValid(chairPhys) then 
+                    chairPhys:enableGravity(false) 
+                    chairPhys:enableMotion(false)
+                end
+            else
+                if isValid(chairPhys) then chairPhys:enableMotion(true) end
+                vehicleChair:setPos(physProp:getPos() + Vector(0, 0, 10))
+                vehicleChair:setAngles(Angle(0))
+                vehicleChair:setFrozen(true)
+            end
         end
 
         if isDetached then return end
@@ -258,7 +272,45 @@ if SERVER then
         local com = phys:getMassCenter()
         local worldCOM = physProp:localToWorld(com)
 
-        if isVehicleMode then
+        -- 3-WAY MOVEMENT HANDLER
+        if isGlideMode then
+            if isValid(vehicleChair) then
+                phys:enableMotion(false) -- Lock down native gravity drop on the controlled prop
+
+                -- Extract view directions
+                local eyeAng = ply:getEyeAngles()
+                local fwd = eyeAng:getForward()
+                local side = eyeAng:getRight()
+
+                -- Setup our fly vector offset calculated from user movement bindings
+                local moveVec = Vector(0,0,0)
+                if ply:keyDown(IN_KEY.FORWARD)  then moveVec = moveVec + fwd end
+                if ply:keyDown(IN_KEY.BACK)     then moveVec = moveVec - fwd end
+                if ply:keyDown(IN_KEY.MOVELEFT) then moveVec = moveVec - side end
+                if ply:keyDown(IN_KEY.MOVERIGHT)then moveVec = moveVec + side end
+                if ply:keyDown(IN_KEY.JUMP)      then moveVec = moveVec + Vector(0,0,0.7) end
+                if ply:keyDown(IN_KEY.DUCK)      then moveVec = moveVec - Vector(0,0,0.7) end
+
+                -- Safely alter the chair position target instantly, acting as our guide point
+                if moveVec:getLength() > 0 then
+                    moveVec:normalize()
+                    vehicleChair:setPos(vehicleChair:getPos() + (moveVec * GLIDE_SPEED))
+                end
+
+                -- Linear Lerp position interpolation tracking towards the floating guide chair
+                local currentPos = physProp:getPos()
+                local targetPos  = vehicleChair:getPos() - Vector(0, 0, 10)
+                local nextPos    = currentPos + (targetPos - currentPos) * GLIDE_LERP
+                physProp:setPos(nextPos)
+
+                -- Safe Angular interpolation logic using math.lerpAngle with correct parameter order
+                local currentAng = physProp:getAngles()
+                local nextAng = math.lerpAngle(GLIDE_LERP, currentAng, eyeAng)
+                physProp:setAngles(nextAng)
+            end
+
+        elseif isVehicleMode then
+            phys:enableMotion(true)
             local propForward = physProp:getAngles():getForward()
             local propUp = physProp:getAngles():getUp()
             
@@ -288,7 +340,14 @@ if SERVER then
                     phys:applyTorque(steerTorque)
                 end
             end
+            
+            if ply:keyDown(IN_KEY.JUMP) and (timer.curtime() - lastJump > 1) then
+                phys:applyForceCenter(Vector(0, 0, phys:getMass() * JUMP_HEIGHT))
+                lastJump = timer.curtime()
+            end
         else
+            -- OMNI MODE
+            phys:enableMotion(true)
             local ang = ply:getEyeAngles()
             local fwd = ang:getForward()
             local right = ang:getRight()
@@ -309,14 +368,14 @@ if SERVER then
                 force:normalize()
                 phys:applyForceOffset(force * phys:getMass() * ROLL_SPEED, worldCOM)
             end
-        end
-
-        if ply:keyDown(IN_KEY.JUMP) and (timer.curtime() - lastJump > 1) then
-            phys:applyForceCenter(Vector(0, 0, phys:getMass() * JUMP_HEIGHT))
-            lastJump = timer.curtime()
+            
+            if ply:keyDown(IN_KEY.JUMP) and (timer.curtime() - lastJump > 1) then
+                phys:applyForceCenter(Vector(0, 0, phys:getMass() * JUMP_HEIGHT))
+                lastJump = timer.curtime()
+            end
         end
     end
-
+    
     local function switchPossessedProp(targetProp)
         physProp = targetProp
         isPossessing = true
@@ -330,7 +389,7 @@ if SERVER then
         
         local phys = physProp:getPhysicsObject()
         if isValid(phys) then
-            phys:enableMotion(true)
+            if not isGlideMode then phys:enableMotion(true) end
             phys:wake()
         end
         
@@ -402,27 +461,24 @@ if SERVER then
 
         local isTaunting = ply:keyDown(KEY_TAUNT)
         if isTaunting and not wasTaunting then
-            if not isDetached then
-                local currentTime = timer.curtime()
-                if (currentTime - lastTaunt) >= TAUNT_COOLDOWN then
-                    local randomSound = TAUNT_SOUNDS[math.random(1, #TAUNT_SOUNDS)]
-                    
-                    local soundSource = nil
-                    if inPhysicsMode and isValid(physProp) then
-                        soundSource = physProp
-                    elseif not inPhysicsMode and isValid(propHolo) then
-                        soundSource = propHolo
-                    end
-
-                    if isValid(soundSource) then
-                        soundSource:emitSound(randomSound)
-                        lastTaunt = currentTime
-                        print("Played sound: " .. randomSound)
-                    end
-                else
-                    local timeLeft = math.ceil(TAUNT_COOLDOWN - (currentTime - lastTaunt))
-                    print("Taunt on cooldown! Wait " .. timeLeft .. "s.")
+            local currentTime = timer.curtime()
+            if (currentTime - lastTaunt) >= TAUNT_COOLDOWN then
+                local randomSound = TAUNT_SOUNDS[math.random(1, #TAUNT_SOUNDS)]
+                
+                local soundSource = nil
+                if inPhysicsMode and isValid(physProp) then
+                    soundSource = physProp
+                elseif not inPhysicsMode and isValid(propHolo) then
+                    soundSource = propHolo
                 end
+
+                if isValid(soundSource) then
+                    soundSource:emitSound(randomSound)
+                    lastTaunt = currentTime
+                end
+            else
+                local timeLeft = math.ceil(TAUNT_COOLDOWN - (currentTime - lastTaunt))
+                print("Taunt on cooldown! Wait " .. timeLeft .. "s.")
             end
         end
         wasTaunting = isTaunting
@@ -496,13 +552,21 @@ if SERVER then
         end
         wasReloading = isReloading
 
+        -- 3-WAY HANDLING SWITCHCYCLE (Omni -> Vehicle -> Glide)
         if inPhysicsMode then
             local isSneak = ply:keyDown(KEY_TOGGLE_STYLE)
             if isSneak and not wasSneak then
-                isVehicleMode = not isVehicleMode
-                if isVehicleMode then
+                if not isVehicleMode and not isGlideMode then
+                    isVehicleMode = true
+                    isGlideMode = false
                     print("Handling changed: VEHICLE MODE (W/S Forward, A/D Turn)")
+                elseif isVehicleMode and not isGlideMode then
+                    isVehicleMode = false
+                    isGlideMode = true
+                    print("Handling changed: GLIDE MODE (Smooth Noclip Guidepoint Interpolation)")
                 else
+                    isVehicleMode = false
+                    isGlideMode = false
                     print("Handling changed: OMNI MODE (Classic Ball Rolling)")
                 end
             end
