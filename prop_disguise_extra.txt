@@ -51,6 +51,7 @@ if SERVER then
   local propHolo    = holograms.create(ply:getPos(), ply:getAngles(), currentModel)
   local physProp    = nil
   local vehicleChair = nil
+  local podController = nil
 
   local inPhysicsMode   = false
   local isVehicleMode   = false
@@ -135,6 +136,14 @@ if SERVER then
     end
   end
 
+  local function setPlayerHidden(hidden)
+    local alpha      = hidden and 0 or 255
+    local renderMode = hidden and 1 or 0
+    ply:setColor(Color(255, 255, 255, alpha))
+    ply:setRenderMode(renderMode)
+    ply:setNoDraw(hidden)
+  end
+
   local function updateHologram()
     if not isValid(propHolo) then return end
 
@@ -147,10 +156,12 @@ if SERVER then
       propHolo:setParent(nil)
       propHolo:setPos(detachedHoloPos)
       propHolo:setAngles(detachedHoloAng)
+      setPlayerHidden(true) -- Force safety catch when unparented
     else
       propHolo:setParent(ply)
       propHolo:setLocalPos(Vector(0, 0, holoOffsetZ))
       propHolo:setLocalAngles(ANGLE_ZERO)
+      setPlayerHidden(true)
     end
     applyVisualProperties(propHolo)
   end
@@ -172,18 +183,16 @@ if SERVER then
     end)
   end)
 
-  local function setPlayerHidden(hidden)
-    local alpha      = hidden and 0 or 255
-    local renderMode = hidden and 1 or 0
-    ply:setColor(Color(255, 255, 255, alpha))
-    ply:setRenderMode(renderMode)
-  end
-
   local function cleanupProp()
     if isValid(ply) and ply:inVehicle() then
       ply:exitVehicle()
     end
     cachedInVehicle = false
+
+    if isValid(podController) then
+      podController:remove()
+      podController = nil
+    end
 
     if isValid(vehicleChair) then
       vehicleChair:remove()
@@ -191,7 +200,6 @@ if SERVER then
     end
 
     if isValid(physProp) then
-      -- Teleport the player safely outside the prop bounds instead of destroying it
       local mins, maxs = physProp:obbMins(), physProp:obbMaxs()
       local safetyOffset = math.max(maxs.x - mins.x, maxs.y - mins.y) * 0.6 + 32
       local fwd = ply:getEyeAngles():getForward()
@@ -227,6 +235,18 @@ if SERVER then
       if isValid(vehicleChair) then
         vehicleChair:setNoDraw(true)
         vehicleChair:setNocollideAll(true)
+      end
+    end
+
+    if not isValid(podController) then
+      podController = prop.createSent(targetProp:getPos(), ANGLE_ZERO, "gmod_wire_pod", true)
+      if isValid(podController) then
+        podController:setNocollideAll(true)
+        podController:setNoDraw(true)
+        
+        local podLink = podController:getWirelink()
+        podLink["Vehicle"] = vehicleChair
+        podLink["Hide Player"] = 1
       end
     end
 
@@ -275,7 +295,6 @@ if SERVER then
     end
   end
 
-  -- Helpers to safely evaluate active movement controls
   local function hasDirectionalInput()
     return ply:keyDown(IN_KEY.FORWARD) or ply:keyDown(IN_KEY.BACK) or 
            ply:keyDown(IN_KEY.MOVELEFT) or ply:keyDown(IN_KEY.MOVERIGHT)
@@ -286,7 +305,7 @@ if SERVER then
   end
 
   --------------------------------------------------------------------------------
-  -- PHYSICS MOVEMENT
+  -- PHYSICS MOVEMENT (UNTOUCHED SPECIAL MODE)
   --------------------------------------------------------------------------------
 
   local function handlePhysicsMovement()
@@ -425,8 +444,6 @@ if SERVER then
             phys:applyTorque(propUp * steering * cachedMass * STEERING_SPEED)
           end
         end
-      else
-        traceTickCount = TRACE_INTERVAL
       end
 
       if ply:keyDown(IN_KEY.JUMP) and (now - lastJump > 1) then
@@ -500,24 +517,40 @@ if SERVER then
     checkAndCreateChair(physProp)
   end
 
+  --------------------------------------------------------------------------------
+  -- OPTIMIZED VISIBILITY HOOK
+  --------------------------------------------------------------------------------
+  hook.add("SetupPlayerVisibility", "PropDisguiseHoloHide", function(p)
+    if p ~= ply or not isAlive then return end
+    
+    -- Force absolute player model invisibility during Hologram and Detached modes
+    if not inPhysicsMode then
+      ply:setNoDraw(true)
+      ply:setRenderMode(1)
+      ply:setColor(Color(0, 0, 0, 0))
+    end
+  end)
+
   -- TICK: Optimized movement gateway
 
   hook.add("Tick", "PropPhysicsLogic", function()
     if not isAlive or not inPhysicsMode or isFrozen then return end
     
-    -- Crucial Safety Check: Ensure the prop still exists!
     if not isValid(physProp) then return end
     
-    -- Sync chair position for Omni and Vehicle modes on every tick
     if not isGlideMode and isValid(vehicleChair) and not isDetached then
       local chairPhys = vehicleChair:getPhysicsObject()
       if isValid(chairPhys) then chairPhys:enableMotion(true) end
       vehicleChair:setPos(physProp:getPos() + Vector(0, 0, 10))
       vehicleChair:setAngles(ANGLE_ZERO)
       vehicleChair:setFrozen(true)
+      
+      if isValid(podController) then
+        podController:setPos(physProp:getPos())
+        podController:setAngles(ANGLE_ZERO)
+      end
     end
 
-    -- If no keys are down in Omni/Vehicle mode, we can safely early-out now
     if not isGlideMode and not hasAnyMovementInput() then 
       return 
     end
@@ -525,7 +558,7 @@ if SERVER then
     handlePhysicsMovement()
   end)
 
-  -- EVENT-DRIVEN STATE MANAGEMENT (Replaced expensive Think updates)
+  -- EVENT-DRIVEN STATE MANAGEMENT
 
   hook.add("PlayerDeath", "PropDisguiseDeath", function(p)
     if p ~= ply then return end
@@ -553,13 +586,11 @@ if SERVER then
   timer.create("PropDisguiseValidation", 0.5, 0, function()
     if not isAlive then return end
 
-    -- Redundant safety check to keep player inside chair while active
     if inPhysicsMode and not isDetached and isValid(vehicleChair) and not ply:inVehicle() then
       ply:enterVehicle(vehicleChair)
       cachedInVehicle = true
     end
 
-    -- Gracefully fallback if our controlled prop vanishes
     if inPhysicsMode and not isValid(physProp) then
       inPhysicsMode = false
       cleanupProp()
@@ -572,7 +603,6 @@ if SERVER then
   hook.add("KeyPress", "PropDisguiseInput", function(p, key)
     if p ~= ply or not isAlive then return end
 
-    -- Copy prop appearance
     if key == KEY_COPY_PROP then
       local tr     = ply:getEyeTrace()
       local target = tr.Entity
@@ -597,7 +627,6 @@ if SERVER then
       end
     end
 
-    -- Possess a prop (detached + reload)
     if key == KEY_POSSESS and isDetached then
       local tr     = ply:getEyeTrace()
       local target = tr.Entity
@@ -605,6 +634,7 @@ if SERVER then
         if hasPermission("entities.canTool", target) then
           local modelPath = target:getModel()
           if modelPath and modelPath ~= "" and modelPath:match("%.mdl$") then
+            if isValid(podController) then podController:remove(); podController = nil end
             if isValid(vehicleChair) then vehicleChair:remove(); vehicleChair = nil end
             switchPossessedProp(target)
           end
@@ -612,7 +642,6 @@ if SERVER then
       end
     end
 
-    -- Cycle movement style
     if key == KEY_TOGGLE_STYLE and inPhysicsMode then
       if isGlideMode and isValid(physProp) then
         local phys = physProp:getPhysicsObject()
@@ -636,7 +665,6 @@ if SERVER then
       end
     end
 
-    -- Toggle detach
     if key == KEY_DETACH then
       isDetached = not isDetached
       if isDetached then
@@ -644,16 +672,11 @@ if SERVER then
           if ply:inVehicle() then ply:exitVehicle() end
           cachedInVehicle = false
           if isValid(physProp) and not isPossessing then isPossessing = true end
-        else
-          if isValid(propHolo) then
-            detachedHoloPos = propHolo:getPos()
-            detachedHoloAng = propHolo:getAngles()
-            updateHologram()
-          end
         end
       else
         if inPhysicsMode then
           if isValid(physProp) then
+            print("Attached back to physics prop!")
             checkAndCreateChair(physProp)
           else
             inPhysicsMode = false
@@ -668,7 +691,6 @@ if SERVER then
       end
     end
 
-    -- Freeze toggle
     if key == KEY_FREEZE and isValid(physProp) then
       local phys = physProp:getPhysicsObject()
       if isValid(phys) then
@@ -678,7 +700,6 @@ if SERVER then
       end
     end
 
-    -- Taunt
     if key == KEY_TAUNT then
       local now = timer.curtime()
       if (now - lastTaunt) >= TAUNT_COOLDOWN then
