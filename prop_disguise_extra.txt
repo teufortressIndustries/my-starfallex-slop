@@ -276,99 +276,99 @@ if SERVER then
     local worldCOM = physProp:localToWorld(com)
 
     -- 3-WAY MOVEMENT HANDLER
-        if isGlideMode then
-            if isValid(vehicleChair) then
-                phys:enableMotion(true)
-                phys:wake()
+    if isGlideMode then
+      if isValid(vehicleChair) then
+        phys:enableMotion(true)
+        phys:wake()
 
-                -- 1. DETECT IF DISRUPTED (Lifted by Physgun or slammed into)
-                local currentPos = physProp:getPos()
-                local actualVel = phys:getVelocity()
-                
-                -- Check if someone grabbed us, or if we were pushed hard by an external force
-                local isGrabbed = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
-                
-                if isGrabbed then
-                    isOutOfControl = true
-                    controlRecoveryTime = timer.curtime() + 1.5 -- Stay out of control for 1.5s after released
-                end
+        -- 1. DETECT IF DISRUPTED (Lifted by Physgun)
+        local currentPos = physProp:getPos()
+        local actualVel = phys:getVelocity()
+        
+        local isGrabbed = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
+        
+        if isGrabbed then
+          isOutOfControl = true
+          controlRecoveryTime = timer.curtime() + 1.5 -- Stay out of control for 1.5s after released
+        end
 
-                -- 2. HANDLE OUT OF CONTROL STATE
-                if isOutOfControl then
-                    -- Turn gravity back on so we plunge or tumble naturally
-                    phys:enableGravity(true)
-                    
-                    -- Drag the guide chair along with our ragdolled position so we don't snap back instantly
-                    vehicleChair:setPos(currentPos + Vector(0, 0, 10))
+        -- 2. HANDLE OUT OF CONTROL STATE
+        if isOutOfControl then
+          phys:enableGravity(true)
+          
+          -- Drag the guide chair along with our ragdolled position so we don't snap back instantly
+          vehicleChair:setPos(currentPos + Vector(0, 0, 10))
 
-                    -- Recover control once time expires and we are no longer grabbed
-                    if timer.curtime() > controlRecoveryTime and not isGrabbed then
-                        isOutOfControl = false
-                        print("Regained control of the glide!")
-                    end
-                else
-                    -- 3. NORMAL GLIDE BEHAVIOR (When in full control)
-                    phys:enableGravity(false)
+          -- Recover control once time expires and we are no longer grabbed
+          if timer.curtime() > controlRecoveryTime and not isGrabbed then
+            isOutOfControl = false
+            print("Regained control of the glide!")
+          end
+        else
+          -- 3. NORMAL GLIDE BEHAVIOR (When in full control)
+          phys:enableGravity(false)
 
-                    -- Extract view directions
-                    local eyeAng = ply:getEyeAngles()
-                    local fwd = eyeAng:getForward()
-                    local side = eyeAng:getRight()
+          -- Extract view directions
+          local eyeAng = ply:getEyeAngles()
+          local fwd = eyeAng:getForward()
+          local side = eyeAng:getRight()
 
-                    -- Setup our fly vector offset calculated from user movement bindings
-                    local moveVec = Vector(0,0,0)
-                    if ply:keyDown(IN_KEY.FORWARD)  then moveVec = moveVec + fwd end
-                    if ply:keyDown(IN_KEY.BACK)     then moveVec = moveVec - fwd end
-                    if ply:keyDown(IN_KEY.MOVELEFT) then moveVec = moveVec - side end
-                    if ply:keyDown(IN_KEY.MOVERIGHT)then moveVec = moveVec + side end
-                    if ply:keyDown(IN_KEY.JUMP)      then moveVec = moveVec + Vector(0,0,0.7) end
-                    if ply:keyDown(IN_KEY.DUCK)      then moveVec = moveVec - Vector(0,0,0.7) end
+          -- Setup our fly vector offset calculated from user movement bindings
+          local moveVec = Vector(0,0,0)
+          if ply:keyDown(IN_KEY.FORWARD)  then moveVec = moveVec + fwd end
+          if ply:keyDown(IN_KEY.BACK)     then moveVec = moveVec - fwd end
+          if ply:keyDown(IN_KEY.MOVELEFT) then moveVec = moveVec - side end
+          if ply:keyDown(IN_KEY.MOVERIGHT)then moveVec = moveVec + side end
+          if ply:keyDown(IN_KEY.JUMP)      then moveVec = moveVec + Vector(0,0,0.7) end
+          if ply:keyDown(IN_KEY.DUCK)      then moveVec = moveVec - Vector(0,0,0.7) end
 
-                    -- Alter the chair position target instantly, acting as our guide point
-                    if moveVec:getLength() > 0 then
-                        moveVec:normalize()
-                        vehicleChair:setPos(vehicleChair:getPos() + (moveVec * GLIDE_SPEED))
-                    end
+          -- Alter the chair position target instantly, acting as our guide point
+          if moveVec:getLength() > 0 then
+            moveVec:normalize()
+            vehicleChair:setPos(vehicleChair:getPos() + (moveVec * GLIDE_SPEED))
+          end
 
-                    -- Linear Lerp position interpolation tracking towards the floating guide chair
-                    local targetPos  = vehicleChair:getPos() - Vector(0, 0, 10)
-                    local nextPos    = currentPos + (targetPos - currentPos) * GLIDE_LERP
-                    
-                    -- Compute calculated target velocity and feed it directly into the physics object.
-                    local targetVelocity = (nextPos - currentPos) * 66
-                    
-                    -- IMPACT DETECTION: If actual speed is drastically different than intended flight speed, we got pushed/hit
-                    if timer.curtime() > (glideActivateTime + 0.5) and actualVel:getDistance(targetVelocity) > 400 then 
-                        isOutOfControl = true
-                        controlRecoveryTime = timer.curtime() + 2.0 -- Spin out for 2 seconds
-                        phys:enableGravity(true)
-                        print("Lost control due to heavy impact/push!")
-                        return
-                    end
+          -- Linear Lerp position interpolation tracking towards the floating guide chair
+          local targetPos  = vehicleChair:getPos() - Vector(0, 0, 10)
+          local nextPos    = currentPos + (targetPos - currentPos) * GLIDE_LERP
+          
+          -- Compute calculated target velocity and feed it directly into the physics object.
+          local targetVelocity = (nextPos - currentPos) * 66
+          
+          -- IMPACT DETECTION: If actual speed is drastically different than intended flight speed, we hit a wall
+          if timer.curtime() > (glideActivateTime + 0.5) and actualVel:getDistance(targetVelocity) > 400 then 
+            -- Instead of forcing a lock-out, we catch up the chair to the prop's current physics impact position
+            vehicleChair:setPos(currentPos + Vector(0, 0, 10))
+            
+            -- Recalculate target position and velocity instantly for this frame so movement remains fluid
+            targetPos = currentPos
+            nextPos = currentPos
+            targetVelocity = actualVel * 0.5 -- Retain half of the impact bounce momentum smoothly
+          end
 
-                    phys:setVelocity(targetVelocity)
+          phys:setVelocity(targetVelocity)
 
-                    -- Safe Angular interpolation logic using math.lerpAngle
-                    local currentAng = physProp:getAngles()
-                    local nextAng = math.lerpAngle(GLIDE_LERP, currentAng, eyeAng)
-                    
-                    -- RAGDOLL FIX: Force all physics bones to stay perfectly aligned to the view angle
-                    local count = physProp:getPhysicsObjectCount()
-                    if count and count > 1 then
-                        for i = 0, count - 1 do
-                            local bonePhys = physProp:getPhysicsObjectNum(i)
-                            if isValid(bonePhys) then
-                                bonePhys:setAngles(nextAng)
-                                bonePhys:setAngleVelocity(Vector(0, 0, 0))
-                            end
-                        end
-                    else
-                        -- Fallback for standard single-bone static props
-                        phys:setAngles(nextAng)
-                        phys:setAngleVelocity(Vector(0, 0, 0))
-                    end
-                end
+          -- Safe Angular interpolation logic using math.lerpAngle
+          local currentAng = physProp:getAngles()
+          local nextAng = math.lerpAngle(GLIDE_LERP, currentAng, eyeAng)
+          
+          -- RAGDOLL FIX: Force all physics bones to stay perfectly aligned to the view angle
+          local count = physProp:getPhysicsObjectCount()
+          if count and count > 1 then
+            for i = 0, count - 1 do
+              local bonePhys = physProp:getPhysicsObjectNum(i)
+              if isValid(bonePhys) then
+                bonePhys:setAngles(nextAng)
+                bonePhys:setAngleVelocity(Vector(0, 0, 0))
+              end
             end
+          else
+            -- Fallback for standard single-bone static props
+            phys:setAngles(nextAng)
+            phys:setAngleVelocity(Vector(0, 0, 0))
+          end
+        end
+      end
 
     
     elseif isVehicleMode then
