@@ -4,6 +4,18 @@
 --@description A cheap knockoff G-Man sightings mod. 100% clientside holograms, zero server lag.
 
 -- ============================================================
+--  WHITELIST
+--  Add SteamID64s of players who should see G-Man.
+-- ============================================================
+local WHITELIST = {
+    ["STEAM_0:0:123456789"] = true,
+    ["STEAM_0:0:000000000"] = true,
+}
+
+-- Bail out entirely if the local player isn't whitelisted
+if not WHITELIST[player():getSteamID()] then return end
+
+-- ============================================================
 --  CONFIG
 -- ============================================================
 local SPAWN_DELAY_MIN   = 600       -- minimum seconds between sightings
