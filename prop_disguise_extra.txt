@@ -8,7 +8,7 @@
 local ROLL_SPEED = 25
 local VEHICLE_SPEED = 35
 local STEERING_SPEED = 25
-local GLIDE_SPEED = 25
+local GLIDE_SPEED = 500
 local JUMP_HEIGHT = 250
 local DEFAULT_MODEL = "models/props_junk/watermelon01.mdl"
 local TAUNT_COOLDOWN = 0
@@ -34,10 +34,6 @@ local TAUNT_SOUNDS = {
     "ambient/alarms/klaxon1.wav",
     "garrysmod/balloon_pop_cute.wav",
     "buttons/combine_button1.wav",
-    "vo/npc/male01/answer30.wav",
-    "vo/npc/male01/hi01.wav",
-    "vo/npc/male01/behindyou01.wav",
-    "vo/npc/male01/question26.wav",
     "friends/friend_join.wav",
     "friends/friend_online.wav",
     "friends/message.wav"
@@ -65,8 +61,6 @@ if SERVER then
     local lastJump = 0
     local lastTaunt = 0
     local isAlive = ply:isAlive()
-    local isOutOfControl = false
-    local controlRecoveryTime = 0
     local glideActivateTime = 0
 
     local holoOffsetZ = 0
@@ -93,7 +87,6 @@ if SERVER then
     -- Throttling counters
     local traceTickCount = 0
     local angleTickCount = 0
-    local glidePosTickCount = 0
     local lastGroundHit = false
 
     local cachedInVehicle = false
@@ -348,121 +341,73 @@ if SERVER then
 
         ---- GLIDE MODE -------------------------------------------------------------
         if isGlideMode then
-            ---- VEHICLE MODE -----------------------------------------------------------
-            if isValid(vehicleChair) then
-                local currentPos = physProp:getPos()
-                local actualVel = phys:getVelocity()
-                local isGrabbed = physProp.isHeldByPlayer and physProp:isHeldByPlayer()
+            local currentVel = phys:getVelocity()
 
-                if isGrabbed then
-                    isOutOfControl = true
-                    controlRecoveryTime = now + 1.5
+            -- Normal glide control: prop is the authority, chair just rides along.
+            phys:enableGravity(false)
+
+            if hasAnyMovementInput() then
+                local eyeAng = ply:getEyeAngles()
+                local fwd = eyeAng:getForward()
+                local side = eyeAng:getRight()
+
+                MOVE_VEC.x = 0
+                MOVE_VEC.y = 0
+                MOVE_VEC.z = 0
+
+                if ply:keyDown(IN_KEY.FORWARD) then
+                    MOVE_VEC.x = MOVE_VEC.x + fwd.x
+                    MOVE_VEC.y = MOVE_VEC.y + fwd.y
+                    MOVE_VEC.z = MOVE_VEC.z + fwd.z
+                end
+                if ply:keyDown(IN_KEY.BACK) then
+                    MOVE_VEC.x = MOVE_VEC.x - fwd.x
+                    MOVE_VEC.y = MOVE_VEC.y - fwd.y
+                    MOVE_VEC.z = MOVE_VEC.z - fwd.z
+                end
+                if ply:keyDown(IN_KEY.MOVELEFT) then
+                    MOVE_VEC.x = MOVE_VEC.x - side.x
+                    MOVE_VEC.y = MOVE_VEC.y - side.y
+                    MOVE_VEC.z = MOVE_VEC.z - side.z
+                end
+                if ply:keyDown(IN_KEY.MOVERIGHT) then
+                    MOVE_VEC.x = MOVE_VEC.x + side.x
+                    MOVE_VEC.y = MOVE_VEC.y + side.y
+                    MOVE_VEC.z = MOVE_VEC.z + side.z
+                end
+                if ply:keyDown(IN_KEY.JUMP) then
+                    MOVE_VEC.z = MOVE_VEC.z + 0.7
+                end
+                if ply:keyDown(IN_KEY.DUCK) then
+                    MOVE_VEC.z = MOVE_VEC.z - 0.7
                 end
 
-                if isOutOfControl then
-                    phys:enableGravity(true)
-                    vehicleChair:setPos(currentPos + Vector(0, 0, 10))
-
-                    if now > controlRecoveryTime and not isGrabbed then
-                        isOutOfControl = false
-                    end
+                local moveLen = MOVE_VEC:getLength()
+                if moveLen > 0 then
+                    local invLen = 1 / moveLen
+                    phys:setVelocity(
+                        Vector(
+                            MOVE_VEC.x * invLen * GLIDE_SPEED,
+                            MOVE_VEC.y * invLen * GLIDE_SPEED,
+                            MOVE_VEC.z * invLen * GLIDE_SPEED
+                        )
+                    )
                 end
-
-                if not isOutOfControl then
-                    phys:enableGravity(false)
-                    local eyeAng = ply:getEyeAngles()
-
-                    -- 1. CHAIR MOVEMENT: Kept unthrottled so keystrokes register instantly
-                    if hasAnyMovementInput() then
-                        local fwd = eyeAng:getForward()
-                        local side = eyeAng:getRight()
-
-                        MOVE_VEC.x = 0
-                        MOVE_VEC.y = 0
-                        MOVE_VEC.z = 0
-
-                        if ply:keyDown(IN_KEY.FORWARD) then
-                            MOVE_VEC.x = MOVE_VEC.x + fwd.x
-                            MOVE_VEC.y = MOVE_VEC.y + fwd.y
-                            MOVE_VEC.z = MOVE_VEC.z + fwd.z
-                        end
-                        if ply:keyDown(IN_KEY.BACK) then
-                            MOVE_VEC.x = MOVE_VEC.x - fwd.x
-                            MOVE_VEC.y = MOVE_VEC.y - fwd.y
-                            MOVE_VEC.z = MOVE_VEC.z - fwd.z
-                        end
-                        if ply:keyDown(IN_KEY.MOVELEFT) then
-                            MOVE_VEC.x = MOVE_VEC.x - side.x
-                            MOVE_VEC.y = MOVE_VEC.y - side.y
-                            MOVE_VEC.z = MOVE_VEC.z - side.z
-                        end
-                        if ply:keyDown(IN_KEY.MOVERIGHT) then
-                            MOVE_VEC.x = MOVE_VEC.x + side.x
-                            MOVE_VEC.y = MOVE_VEC.y + side.y
-                            MOVE_VEC.z = MOVE_VEC.z + side.z
-                        end
-                        if ply:keyDown(IN_KEY.JUMP) then
-                            MOVE_VEC.z = MOVE_VEC.z + 0.7
-                        end
-                        if ply:keyDown(IN_KEY.DUCK) then
-                            MOVE_VEC.z = MOVE_VEC.z - 0.7
-                        end
-
-                        local moveLen = MOVE_VEC:getLength()
-                        if moveLen > 0 then
-                            local invLen = 1 / moveLen
-                            local chairPos = vehicleChair:getPos()
-                            vehicleChair:setPos(
-                                Vector(
-                                    chairPos.x + MOVE_VEC.x * invLen * GLIDE_SPEED,
-                                    chairPos.y + MOVE_VEC.y * invLen * GLIDE_SPEED,
-                                    chairPos.z + MOVE_VEC.z * invLen * GLIDE_SPEED
-                                )
-                            )
-                        end
-                    end
-
-                    -- 2. PROP POSITION/VELOCITY THROTTLE: Only runs calculations every N ticks
-                    glidePosTickCount = glidePosTickCount + 1
-                    if glidePosTickCount >= GLOBAL_THROTTLE then
-                        glidePosTickCount = 0
-
-                        local chairPos = vehicleChair:getPos()
-                        FORCE_VEC.x = (chairPos.x - currentPos.x) * 15
-                        FORCE_VEC.y = (chairPos.y - currentPos.y) * 15
-                        FORCE_VEC.z = (chairPos.z - currentPos.z - 10) * 15
-
-                        local safetyThreshold = 1200 * GLOBAL_THROTTLE
-
-                        if now > (glideActivateTime + 0.5) and actualVel:getDistance(FORCE_VEC) > safetyThreshold then
-                            if actualVel:getLength() < 300 then
-                                vehicleChair:setPos(currentPos + Vector(0, 0, 10))
-                                FORCE_VEC.x = 0
-                                FORCE_VEC.y = 0
-                                FORCE_VEC.z = 0
-                                phys:setVelocity(FORCE_VEC)
-                            else
-                                isOutOfControl = true
-                                controlRecoveryTime = now + 2.0
-                                phys:enableGravity(true)
-                                return
-                            end
-                        end
-
-                        phys:setVelocity(FORCE_VEC)
-                    end
-
-                    -- 3. PROP ANGLE THROTTLE: Standard orientation alignment
-                    angleTickCount = angleTickCount + 1
-                    if angleTickCount >= GLOBAL_THROTTLE then
-                        angleTickCount = 0
-                        phys:setAngles(eyeAng)
-                        phys:setAngleVelocity(VECTOR_ZERO)
-                    end
-                end
+            else
+                -- Dampen drift when no input is held.
+                phys:setVelocity(currentVel * 0.85)
             end
+
+            -- Angle alignment throttled as before.
+            angleTickCount = angleTickCount + 1
+            if angleTickCount >= GLOBAL_THROTTLE then
+                angleTickCount = 0
+                phys:setAngles(ply:getEyeAngles())
+                phys:setAngleVelocity(VECTOR_ZERO)
+            end
+
+        ---- VEHICLE / ROLL MODE ----------------------------------------------------
         elseif isVehicleMode then
-            ---- OMNI / ROLL MODE -------------------------------------------------------
             local throttle = 0
             if ply:keyDown(IN_KEY.FORWARD) then
                 throttle = throttle + 1
@@ -508,6 +453,8 @@ if SERVER then
                 phys:applyForceCenter(Vector(0, 0, cachedMass * JUMP_HEIGHT))
                 lastJump = now
             end
+
+        ---- OMNI / ROLL MODE -------------------------------------------------------
         else
             if hasDirectionalInput() then
                 local ang = ply:getEyeAngles()
@@ -602,7 +549,7 @@ if SERVER then
     )
 
     --------------------------------------------------------------------------------
-    -- TICK: Completely Unthrottled Movement Loops
+    -- TICK: Chair tracking + movement
     --------------------------------------------------------------------------------
     hook.add(
         "Tick",
@@ -615,8 +562,9 @@ if SERVER then
                 return
             end
 
-            -- Kept fully unthrottled for active user responsiveness across all modes
-            if not isGlideMode and isValid(vehicleChair) and not isDetached then
+            -- Chair always tracks the prop (all modes including glide).
+            -- In glide mode the prop is the authority, so the chair must follow it.
+            if isValid(vehicleChair) and not isDetached then
                 vehicleChair:setPos(physProp:getPos() + Vector(0, 0, 10))
                 vehicleChair:setAngles(ANGLE_ZERO)
 
@@ -753,7 +701,7 @@ if SERVER then
                 end
             end
 
-            if key == KEY_TOGGLE_STYLE and inPhysicsMode then
+            if key == KEY_TOGGLE_STYLE and inPhysicsMode and not isDetached then
                 if isGlideMode and isValid(physProp) then
                     local phys = physProp:getPhysicsObject()
                     if isValid(phys) then
@@ -793,6 +741,13 @@ if SERVER then
                         cachedInVehicle = false
                         if isValid(physProp) and not isPossessing then
                             isPossessing = true
+                        end
+                        if isGlideMode and isValid(physProp) then
+                            local phys = physProp:getPhysicsObject()
+                            if isValid(phys) then
+                                phys:setVelocity(VECTOR_ZERO)
+                                phys:setAngleVelocity(VECTOR_ZERO)
+                            end
                         end
                     else
                         updateHologram()
@@ -841,7 +796,7 @@ if SERVER then
         "KeyRelease",
         "PropDisguiseRelease",
         function(p, key)
-            if p ~= ply or key ~= KEY_UNDO_CYCLE or not isAlive then
+            if p ~= ply or key ~= KEY_UNDO_CYCLE or not isAlive or isDetached then
                 return
             end
 
