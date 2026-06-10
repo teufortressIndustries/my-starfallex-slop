@@ -7,10 +7,10 @@ if SERVER then
     -- ============================================================
     --  SERVER RECEIVER
     -- ============================================================
-    -- This listens for the client reporting the spawn and alerts you
+    -- This listens for the client reporting the sighting and alerts you
     net.receive("gman_spawned_report", function(len, ply)
-        -- Format a neat notification in your server/chip console
-        print(string.format("[G-Man Sightings] %s just spawned G-Man!", ply:getName()))
+        local distance = net.readUInt(16)
+        print(string.format("[G-Man Sightings] %s SPOTTED G-Man from %d units away!", ply:getName(), distance))
     end)
 
 else
@@ -31,7 +31,7 @@ else
     -- ============================================================
     --  CONFIG
     -- ============================================================
-    local SPAWN_DELAY_MIN   = 60       -- minimum seconds between sightings
+    local SPAWN_DELAY_MIN   = 600       -- minimum seconds between sightings
     local SPAWN_DELAY_MAX   = 1800      -- maximum seconds between sightings
     local SPAWN_RADIUS      = 1500      -- how far away G-Man can appear (units)
     local SPAWN_BEHIND_BIAS = 0.6       -- 0=anywhere, 1=strictly behind you
@@ -159,13 +159,6 @@ else
         local soundPos    = plyPos + toGman * 150  -- How much units in G-Man's direction
         sound.emitSound(GMAN_SOUND, soundPos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
 
-        -- --------------------------------------------------------
-        -- REPORT SIGHTING TO SERVER
-        -- --------------------------------------------------------
-        net.start("gman_spawned_report")
-        net.send() -- Leaving target nil on clientside automatically sends to Server
-        -- --------------------------------------------------------
-
         scheduleNextSighting()
     end
 
@@ -188,9 +181,17 @@ else
         if angleDiff < SPOT_ANGLE then
             spotted     = true
             vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
+        
+            local distance = math.floor(eyes:getDistance(gmanPos))  -- units away
+        
             timer.simple(VANISH_DELAY, function()
                 removeGman()
             end)
+        
+            -- Report sighting WITH distance
+            net.start("gman_spawned_report")
+            net.writeUInt(distance, 16)   -- 16 bits  up to 65535 units
+            net.send()
         end
     end)
 
