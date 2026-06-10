@@ -95,8 +95,8 @@ else
             local floorTr = trace.line(tryPos, tryPos - Vector(0, 0, 300), ply)
             if floorTr.Hit then
                 local spawnPos = floorTr.HitPos + Vector(0, 0, 2)
-
-                if isOutOfView(spawnPos, SPAWN_BEHIND_BIAS - 0.2) then
+            
+                if isOutOfView(spawnPos, SPAWN_BEHIND_BIAS - 0.2) and hasLineOfSight(spawnPos) then
                     return spawnPos
                 end
             end
