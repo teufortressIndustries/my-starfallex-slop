@@ -31,12 +31,13 @@ else
     -- ============================================================
     --  CONFIG
     -- ============================================================
-    local SPAWN_DELAY_MIN   = 600       -- minimum seconds between sightings
+    local SPAWN_DELAY_MIN   = 60       -- minimum seconds between sightings
     local SPAWN_DELAY_MAX   = 1800      -- maximum seconds between sightings
     local SPAWN_RADIUS      = 1500      -- how far away G-Man can appear (units)
     local SPAWN_BEHIND_BIAS = 0.6       -- 0=anywhere, 1=strictly behind you
-    local SPOT_ANGLE        = 70        -- degrees: how close your crosshair must get to "notice" him
-    local VANISH_DELAY      = 0.3       -- seconds after noticing before he disappears
+    local SPOT_ANGLE        = 65        -- degrees: how close your crosshair must get to "notice" him
+    local VANISH_DELAY      = 0.3       -- seconds after noticing before he disappears (close)
+    local VANISH_DELAY_MAX  = 1.0       -- vanish delay when spotted at max spawn radius
     local GMAN_MODEL        = "models/gman_high.mdl"
     local GMAN_SCALE        = Vector(1, 1, 1)
     local GMAN_MATERIAL     = "models/debug/debugwhite"
@@ -182,15 +183,17 @@ else
             spotted     = true
             vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
         
-            local distance = math.floor(eyes:getDistance(gmanPos))  -- units away
+            local distance    = math.floor(eyes:getDistance(gmanPos))
+            local t           = math.clamp(distance / SPAWN_RADIUS, 0, 1)
+            local vanishDelay = VANISH_DELAY + (VANISH_DELAY_MAX - VANISH_DELAY) * t
         
-            timer.simple(VANISH_DELAY, function()
+            timer.simple(vanishDelay, function()
                 removeGman()
             end)
         
             -- Report sighting WITH distance
             net.start("gman_spawned_report")
-            net.writeUInt(distance, 16)   -- 16 bits  up to 65535 units
+            net.writeUInt(distance, 16)
             net.send()
         end
     end)
