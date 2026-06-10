@@ -7,13 +7,15 @@
 --  WHITELIST
 --  Add SteamID64s of players who should see G-Man.
 -- ============================================================
+local WHITELIST_ON = false
+
 local WHITELIST = {
     ["STEAM_0:0:123456789"] = true,
     ["STEAM_0:0:000000000"] = true,
 }
 
 -- Bail out entirely if the local player isn't whitelisted
-if not WHITELIST[player():getSteamID()] then return end
+if not WHITELIST[player():getSteamID()] and WHITELIST_ON then return end
 
 -- ============================================================
 --  CONFIG
