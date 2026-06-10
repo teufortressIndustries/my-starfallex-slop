@@ -1,189 +1,208 @@
 --@name Who is that?
 --@author John Doe
---@client
+--@shared
 --@description A cheap knockoff G-Man sightings mod. 100% clientside holograms, zero server lag.
 
--- ============================================================
---  WHITELIST
---  Add SteamID64s of players who should see G-Man.
--- ============================================================
-local WHITELIST_ON = false
+if SERVER then
+    -- ============================================================
+    --  SERVER RECEIVER
+    -- ============================================================
+    -- This listens for the client reporting the spawn and alerts you
+    net.receive("gman_spawned_report", function(len, ply)
+        -- Format a neat notification in your server/chip console
+        print(string.format("[G-Man Sightings] %s just spawned G-Man!", ply:getName()))
+    end)
 
-local WHITELIST = {
-    ["STEAM_0:0:123456789"] = true,
-    ["STEAM_0:0:000000000"] = true,
-}
+else
+    -- ============================================================
+    --  CLIENT WHITELIST
+    --  Add SteamID64s of players who should see G-Man.
+    -- ============================================================
+    local WHITELIST_ON = false
 
--- Bail out entirely if the local player isn't whitelisted
-if not WHITELIST[player():getSteamID()] and WHITELIST_ON then return end
+    local WHITELIST = {
+        ["STEAM_0:0:123456789"] = true,
+        ["STEAM_0:0:000000000"] = true,
+    }
 
--- ============================================================
---  CONFIG
--- ============================================================
-local SPAWN_DELAY_MIN   = 60       -- minimum seconds between sightings
-local SPAWN_DELAY_MAX   = 3600      -- maximum seconds between sightings
-local SPAWN_RADIUS      = 1500      -- how far away G-Man can appear (units)
-local SPAWN_BEHIND_BIAS = 0.6       -- 0=anywhere, 1=strictly behind you
-local SPOT_ANGLE        = 70        -- degrees: how close your crosshair must get to "notice" him
-local VANISH_DELAY      = 0.3       -- seconds after noticing before he disappears
-local GMAN_MODEL        = "models/gman_high.mdl"
-local GMAN_SCALE        = Vector(1, 1, 1)
-local GMAN_MATERIAL     = "models/debug/debugwhite"
-local GMAN_COLOR        = Color(0, 0, 0)
+    -- Bail out entirely if the local player isn't whitelisted
+    if not WHITELIST[player():getSteamID()] and WHITELIST_ON then return end
 
-local GMAN_SOUND        = "ambient/levels/canals/windchime5.wav"
-local GMAN_SOUND_LEVEL  = 75        -- soundLevel (attenuation), default 75
-local GMAN_SOUND_PITCH  = 100       -- pitch percent
-local GMAN_SOUND_VOLUME = 1         -- volume (0-1)
+    -- ============================================================
+    --  CONFIG
+    -- ============================================================
+    local SPAWN_DELAY_MIN   = 60       -- minimum seconds between sightings
+    local SPAWN_DELAY_MAX   = 1800      -- maximum seconds between sightings
+    local SPAWN_RADIUS      = 1500      -- how far away G-Man can appear (units)
+    local SPAWN_BEHIND_BIAS = 0.6       -- 0=anywhere, 1=strictly behind you
+    local SPOT_ANGLE        = 70        -- degrees: how close your crosshair must get to "notice" him
+    local VANISH_DELAY      = 0.3       -- seconds after noticing before he disappears
+    local GMAN_MODEL        = "models/gman_high.mdl"
+    local GMAN_SCALE        = Vector(1, 1, 1)
+    local GMAN_MATERIAL     = "models/debug/debugwhite"
+    local GMAN_COLOR        = Color(0, 0, 0)
 
--- ============================================================
---  STATE
--- ============================================================
-local gman         = nil
-local spotted      = false
-local vanishTimer  = nil
-local spawnTimer   = nil
+    local GMAN_SOUND        = "ambient/levels/canals/windchime5.wav"
+    local GMAN_SOUND_LEVEL  = 75        -- soundLevel (attenuation), default 75
+    local GMAN_SOUND_PITCH  = 100       -- pitch percent
+    local GMAN_SOUND_VOLUME = 1         -- volume (0-1)
 
--- ============================================================
---  HELPERS
--- ============================================================
+    -- ============================================================
+    --  STATE
+    -- ============================================================
+    local gman         = nil
+    local spotted      = false
+    local vanishTimer  = nil
+    local spawnTimer   = nil
 
-local function isOutOfView(pos, fovBias)
-    local ply   = player()
-    local eyes  = ply:getEyePos()
-    local aim   = ply:getAimVector()
-    local toPos = (pos - eyes):getNormalized()
-    local dot   = aim:dot(toPos)
-    return dot < fovBias
-end
+    -- ============================================================
+    --  HELPERS
+    -- ============================================================
 
-local function hasLineOfSight(pos)
-    local ply    = player()
-    local eyes   = ply:getEyePos()
-    local tr     = trace.line(eyes, pos, ply)
-    return tr.HitPos:getDistance(pos) < 32
-end
+    local function isOutOfView(pos, fovBias)
+        local ply   = player()
+        local eyes  = ply:getEyePos()
+        local aim   = ply:getAimVector()
+        local toPos = (pos - eyes):getNormalized()
+        local dot   = aim:dot(toPos)
+        return dot < fovBias
+    end
 
-local function findSpawnPos()
-    local ply     = player()
-    local plyPos  = ply:getPos()
-    local forward = ply:getForward()
+    local function hasLineOfSight(pos)
+        local ply    = player()
+        local eyes   = ply:getEyePos()
+        local tr     = trace.line(eyes, pos, ply)
+        return tr.HitPos:getDistance(pos) < 32
+    end
 
-    for _ = 1, 30 do
-        local randomYaw = math.random() * 360
-        local dir = Vector(math.cos(math.rad(randomYaw)), math.sin(math.rad(randomYaw)), 0)
+    local function findSpawnPos()
+        local ply     = player()
+        local plyPos  = ply:getPos()
+        local forward = ply:getForward()
 
-        local behind = -forward
-        behind.z = 0
-        behind:normalize()
-        dir = (dir * (1 - SPAWN_BEHIND_BIAS) + behind * SPAWN_BEHIND_BIAS):getNormalized()
+        for _ = 1, 30 do
+            local randomYaw = math.random() * 360
+            local dir = Vector(math.cos(math.rad(randomYaw)), math.sin(math.rad(randomYaw)), 0)
 
-        local dist   = math.random(150, SPAWN_RADIUS)
-        local tryPos = plyPos + dir * dist + Vector(0, 0, 100)
+            local behind = -forward
+            behind.z = 0
+            behind:normalize()
+            dir = (dir * (1 - SPAWN_BEHIND_BIAS) + behind * SPAWN_BEHIND_BIAS):getNormalized()
 
-        local floorTr = trace.line(tryPos, tryPos - Vector(0, 0, 300), ply)
-        if floorTr.Hit then
-            local spawnPos = floorTr.HitPos + Vector(0, 0, 2)
+            local dist   = math.random(150, SPAWN_RADIUS)
+            local tryPos = plyPos + dir * dist + Vector(0, 0, 100)
 
-            if isOutOfView(spawnPos, SPAWN_BEHIND_BIAS - 0.2) then
-                return spawnPos
+            local floorTr = trace.line(tryPos, tryPos - Vector(0, 0, 300), ply)
+            if floorTr.Hit then
+                local spawnPos = floorTr.HitPos + Vector(0, 0, 2)
+
+                if isOutOfView(spawnPos, SPAWN_BEHIND_BIAS - 0.2) then
+                    return spawnPos
+                end
             end
         end
+
+        return nil
     end
 
-    return nil
-end
+    -- ============================================================
+    --  CORE LOGIC
+    -- ============================================================
 
--- ============================================================
---  CORE LOGIC
--- ============================================================
-
-local function gmanAlive()
-    return gman ~= nil and gman:isValid()
-end
-
-local function removeGman()
-    if gmanAlive() then
-        gman:remove()
+    local function gmanAlive()
+        return gman ~= nil and gman:isValid()
     end
-    gman    = nil
-    spotted = false
-    if vanishTimer then
-        timer.remove(vanishTimer)
-        vanishTimer = nil
-    end
-end
 
-local function scheduleNextSighting()
-    local delay = math.random(SPAWN_DELAY_MIN, SPAWN_DELAY_MAX)
-    spawnTimer  = "gman_spawn_" .. tostring(math.random(100000))
-    timer.simple(delay, function()
-        if not gmanAlive() then
-            spawnGman()
-        else
-            scheduleNextSighting()
+    local function removeGman()
+        if gmanAlive() then
+            gman:remove()
         end
-    end)
-end
-
-function spawnGman()
-    local pos = findSpawnPos()
-    if not pos then
-        timer.simple(5, spawnGman)
-        return
+        gman    = nil
+        spotted = false
+        if vanishTimer then
+            timer.remove(vanishTimer)
+            vanishTimer = nil
+        end
     end
 
-    local ply      = player()
-    local toPlayer = (ply:getEyePos() - pos):getAngle()
-    local ang      = Angle(0, toPlayer.y, 0)
-
-    gman = hologram.create(pos, ang, GMAN_MODEL, GMAN_SCALE)
-    gman:setMaterial(GMAN_MATERIAL)
-    gman:setColor(GMAN_COLOR)
-
-    spotted = false
-
-    local plyPos      = player():getPos()
-    local toGman      = (pos - plyPos):getNormalized()
-    local soundPos    = plyPos + toGman * 150   -- How much units in G-Man's direction
-    sound.emitSound(GMAN_SOUND, soundPos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
-
-    scheduleNextSighting()
-end
-
--- ============================================================
---  THINK HOOK
--- ============================================================
-hook.add("think", "gman_vision_check", function()
-    if not gmanAlive() then return end
-    if spotted then return end
-
-    local ply      = player()
-    local eyes     = ply:getEyePos()
-    local aim      = ply:getAimVector()
-    local gmanPos  = gman:getPos() + Vector(0, 0, 40)
-    local toGman   = (gmanPos - eyes):getNormalized()
-
-    local dot       = aim:dot(toGman)
-    local angleDiff = math.deg(math.acos(math.clamp(dot, -1, 1)))
-
-    if angleDiff < SPOT_ANGLE then
-        spotted     = true
-        vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
-        timer.simple(VANISH_DELAY, function()
-            removeGman()
+    local function scheduleNextSighting()
+        local delay = math.random(SPAWN_DELAY_MIN, SPAWN_DELAY_MAX)
+        spawnTimer  = "gman_spawn_" .. tostring(math.random(100000))
+        timer.simple(delay, function()
+            if not gmanAlive() then
+                spawnGman()
+            else
+                scheduleNextSighting()
+            end
         end)
     end
-end)
 
--- ============================================================
---  BOOT
--- ============================================================
-timer.simple(5, function()
-    scheduleNextSighting()
-end)
+    function spawnGman()
+        local pos = findSpawnPos()
+        if not pos then
+            timer.simple(5, spawnGman)
+            return
+        end
 
-hook.add("removed", "gman_cleanup", function()
-    removeGman()
-    if spawnTimer then timer.remove(spawnTimer) end
-end)
+        local ply      = player()
+        local toPlayer = (ply:getEyePos() - pos):getAngle()
+        local ang      = Angle(0, toPlayer.y, 0)
+
+        gman = hologram.create(pos, ang, GMAN_MODEL, GMAN_SCALE)
+        gman:setMaterial(GMAN_MATERIAL)
+        gman:setColor(GMAN_COLOR)
+
+        spotted = false
+
+        local plyPos      = player():getPos()
+        local toGman      = (pos - plyPos):getNormalized()
+        local soundPos    = plyPos + toGman * 150  -- How much units in G-Man's direction
+        sound.emitSound(GMAN_SOUND, soundPos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
+
+        -- --------------------------------------------------------
+        -- REPORT SIGHTING TO SERVER
+        -- --------------------------------------------------------
+        net.start("gman_spawned_report")
+        net.send() -- Leaving target nil on clientside automatically sends to Server
+        -- --------------------------------------------------------
+
+        scheduleNextSighting()
+    end
+
+    -- ============================================================
+    --  THINK HOOK
+    -- ============================================================
+    hook.add("think", "gman_vision_check", function()
+        if not gmanAlive() then return end
+        if spotted then return end
+
+        local ply      = player()
+        local eyes     = ply:getEyePos()
+        local aim      = ply:getAimVector()
+        local gmanPos  = gman:getPos() + Vector(0, 0, 40)
+        local toGman   = (gmanPos - eyes):getNormalized()
+
+        local dot       = aim:dot(toGman)
+        local angleDiff = math.deg(math.acos(math.clamp(dot, -1, 1)))
+
+        if angleDiff < SPOT_ANGLE then
+            spotted     = true
+            vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
+            timer.simple(VANISH_DELAY, function()
+                removeGman()
+            end)
+        end
+    end)
+
+    -- ============================================================
+    --  BOOT
+    -- ============================================================
+    timer.simple(5, function()
+        scheduleNextSighting()
+    end)
+
+    hook.add("removed", "gman_cleanup", function()
+        removeGman()
+        if spawnTimer then timer.remove(spawnTimer) end
+    end)
+end
