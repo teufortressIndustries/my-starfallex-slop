@@ -6,61 +6,59 @@
 -- ============================================================
 --  CONFIG
 -- ============================================================
-local SPAWN_DELAY_MIN   = 30        -- minimum seconds between sightings
-local SPAWN_DELAY_MAX   = 60        -- maximum seconds between sightings
-local SPAWN_RADIUS      = 400       -- how far away G-Man can appear (units)
+local SPAWN_DELAY_MIN   = 600       -- minimum seconds between sightings
+local SPAWN_DELAY_MAX   = 3600      -- maximum seconds between sightings
+local SPAWN_RADIUS      = 1500      -- how far away G-Man can appear (units)
 local SPAWN_BEHIND_BIAS = 0.6       -- 0=anywhere, 1=strictly behind you
-local SPOT_ANGLE        = 12        -- degrees: how close your crosshair must get to "notice" him
-local VANISH_DELAY      = 0.8       -- seconds after noticing before he disappears
-local GMAN_MODEL        = "models/player/gman_high.mdl"
+local SPOT_ANGLE        = 70        -- degrees: how close your crosshair must get to "notice" him
+local VANISH_DELAY      = 0.3       -- seconds after noticing before he disappears
+local GMAN_MODEL        = "models/gman_high.mdl"
 local GMAN_SCALE        = Vector(1, 1, 1)
+local GMAN_MATERIAL     = "models/debug/debugwhite"
+local GMAN_COLOR        = Color(0, 0, 0)
+
+local GMAN_SOUND        = "ambient/levels/canals/windchime5.wav"
+local GMAN_SOUND_LEVEL  = 75        -- soundLevel (attenuation), default 75
+local GMAN_SOUND_PITCH  = 100       -- pitch percent
+local GMAN_SOUND_VOLUME = 1         -- volume (0-1)
 
 -- ============================================================
 --  STATE
 -- ============================================================
-local gman         = nil   -- the hologram object
-local spotted      = false -- have we looked at him this sighting?
-local vanishTimer  = nil   -- name of the pending vanish timer
-local spawnTimer   = nil   -- name of the next-spawn timer
+local gman         = nil
+local spotted      = false
+local vanishTimer  = nil
+local spawnTimer   = nil
 
 -- ============================================================
 --  HELPERS
 -- ============================================================
 
---- Returns true if world position `pos` is outside the player's view cone
 local function isOutOfView(pos, fovBias)
     local ply   = player()
     local eyes  = ply:getEyePos()
     local aim   = ply:getAimVector()
     local toPos = (pos - eyes):getNormalized()
     local dot   = aim:dot(toPos)
-    -- dot < 0 means directly behind; fovBias lets us push the "safe" zone
     return dot < fovBias
 end
 
---- Cast a quick trace from eyes to pos; returns true if nothing solid blocks it
 local function hasLineOfSight(pos)
     local ply    = player()
     local eyes   = ply:getEyePos()
     local tr     = trace.line(eyes, pos, ply)
-    return tr.HitPos:getDistance(pos) < 32  -- close enough = unblocked
+    return tr.HitPos:getDistance(pos) < 32
 end
 
---- Pick a random position around the player that is:
----   - roughly behind them (based on SPAWN_BEHIND_BIAS)
----   - on the ground (a downward trace to find floor)
----   - not directly visible
 local function findSpawnPos()
     local ply     = player()
     local plyPos  = ply:getPos()
     local forward = ply:getForward()
 
-    for _ = 1, 30 do  -- up to 30 attempts
-        -- random angle: bias toward behind the player
+    for _ = 1, 30 do
         local randomYaw = math.random() * 360
         local dir = Vector(math.cos(math.rad(randomYaw)), math.sin(math.rad(randomYaw)), 0)
 
-        -- blend toward the "behind" direction based on bias
         local behind = -forward
         behind.z = 0
         behind:normalize()
@@ -69,26 +67,23 @@ local function findSpawnPos()
         local dist   = math.random(150, SPAWN_RADIUS)
         local tryPos = plyPos + dir * dist + Vector(0, 0, 100)
 
-        -- trace downward to find floor
         local floorTr = trace.line(tryPos, tryPos - Vector(0, 0, 300), ply)
         if floorTr.Hit then
             local spawnPos = floorTr.HitPos + Vector(0, 0, 2)
 
-            -- check it's out of the player's view *right now*
             if isOutOfView(spawnPos, SPAWN_BEHIND_BIAS - 0.2) then
                 return spawnPos
             end
         end
     end
 
-    return nil  -- couldn't find a safe spot
+    return nil
 end
 
 -- ============================================================
 --  CORE LOGIC
 -- ============================================================
 
---- StarfallEx doesn't have IsValid(); use this instead
 local function gmanAlive()
     return gman ~= nil and gman:isValid()
 end
@@ -109,7 +104,6 @@ local function scheduleNextSighting()
     local delay = math.random(SPAWN_DELAY_MIN, SPAWN_DELAY_MAX)
     spawnTimer  = "gman_spawn_" .. tostring(math.random(100000))
     timer.simple(delay, function()
-        -- only spawn if no active sighting
         if not gmanAlive() then
             spawnGman()
         else
@@ -118,52 +112,49 @@ local function scheduleNextSighting()
     end)
 end
 
--- forward-declared above, defined here
 function spawnGman()
     local pos = findSpawnPos()
     if not pos then
-        -- couldn't place him safely, try again sooner
         timer.simple(5, spawnGman)
         return
     end
 
-    -- face toward the player so he looks creepy staring at you
     local ply      = player()
     local toPlayer = (ply:getEyePos() - pos):getAngle()
     local ang      = Angle(0, toPlayer.y, 0)
 
-    gman    = holograms.create(pos, ang, GMAN_MODEL, GMAN_SCALE)
+    gman = hologram.create(pos, ang, GMAN_MODEL, GMAN_SCALE)
+    gman:setMaterial(GMAN_MATERIAL)
+    gman:setColor(GMAN_COLOR)
+
     spotted = false
 
-    -- schedule the next sighting regardless (removes old one when triggered)
+    -- Play the wind chime sound from G-Man's position so it
+    -- appears to come from his direction in 3D space
+    sound.emitSound(GMAN_SOUND, pos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
+
     scheduleNextSighting()
 end
 
 -- ============================================================
---  THINK HOOK: detect if player is looking at G-Man
+--  THINK HOOK
 -- ============================================================
 hook.add("think", "gman_vision_check", function()
     if not gmanAlive() then return end
-    if spotted then return end       -- already triggered vanish, don't re-check
+    if spotted then return end
 
     local ply      = player()
     local eyes     = ply:getEyePos()
     local aim      = ply:getAimVector()
-    local gmanPos  = gman:getPos() + Vector(0, 0, 40)  -- aim at chest height
+    local gmanPos  = gman:getPos() + Vector(0, 0, 40)
     local toGman   = (gmanPos - eyes):getNormalized()
 
-    -- angular distance between aim and G-Man direction
     local dot       = aim:dot(toGman)
     local angleDiff = math.deg(math.acos(math.clamp(dot, -1, 1)))
 
     if angleDiff < SPOT_ANGLE then
-        -- Player's crosshair is near G-Man
-        -- Now wait: if they keep looking OR look away, he vanishes
         spotted     = true
         vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
-
-        -- Check again after short delay  if they're STILL looking or now NOT looking,
-        -- he vanishes either way (the trick: he only stays if you never notice)
         timer.simple(VANISH_DELAY, function()
             removeGman()
         end)
@@ -173,12 +164,10 @@ end)
 -- ============================================================
 --  BOOT
 -- ============================================================
--- Give a short grace period before the first sighting
 timer.simple(5, function()
     scheduleNextSighting()
 end)
 
--- Cleanup on chip removal
 hook.add("removed", "gman_cleanup", function()
     removeGman()
     if spawnTimer then timer.remove(spawnTimer) end
