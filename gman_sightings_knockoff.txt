@@ -1,7 +1,7 @@
 --@name Who is that?
 --@author John Doe
 --@shared
---@description A cheap knockoff G-Man sightings mod. 100% clientside holograms, zero server lag.
+--@description A cheap knockoff G-Man sightings mod.
 
 if SERVER then
     -- ============================================================
