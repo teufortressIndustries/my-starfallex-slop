@@ -33,11 +33,11 @@ else
     -- ============================================================
     local SPAWN_DELAY_MIN   = 60       -- minimum seconds between sightings
     local SPAWN_DELAY_MAX   = 1800      -- maximum seconds between sightings
-    local SPAWN_RADIUS      = 1500      -- how far away G-Man can appear (units)
-    local SPAWN_BEHIND_BIAS = 0.6       -- 0=anywhere, 1=strictly behind you
+    local SPAWN_RADIUS      = 1000      -- how far away G-Man can appear (units)
+    local SPAWN_BEHIND_BIAS = 0.5       -- 0=anywhere, 1=strictly behind you
     local SPOT_ANGLE        = 65        -- degrees: how close your crosshair must get to "notice" him
-    local VANISH_DELAY      = 0.3       -- seconds after noticing before he disappears (close)
-    local VANISH_DELAY_MAX  = 1.0       -- vanish delay when spotted at max spawn radius
+    local VANISH_DELAY      = 0.2       -- seconds after noticing before he disappears (close)
+    local VANISH_DELAY_MAX  = 0.6       -- vanish delay when spotted at max spawn radius
     local GMAN_MODEL        = "models/gman_high.mdl"
     local GMAN_SCALE        = Vector(1, 1, 1)
     local GMAN_MATERIAL     = "models/debug/debugwhite"
@@ -157,7 +157,7 @@ else
 
         local plyPos      = player():getPos()
         local toGman      = (pos - plyPos):getNormalized()
-        local soundPos    = plyPos + toGman * 150  -- How much units in G-Man's direction
+        local soundPos    = plyPos + toGman * 50  -- How much units in G-Man's direction
         sound.emitSound(GMAN_SOUND, soundPos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
 
         scheduleNextSighting()
