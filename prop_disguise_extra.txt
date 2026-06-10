@@ -8,6 +8,7 @@
 local ROLL_SPEED = 25
 local VEHICLE_SPEED = 35
 local STEERING_SPEED = 25
+local VIEW_STEER_TORQUE = 100
 local GLIDE_SPEED = 500
 local JUMP_HEIGHT = 250
 local DEFAULT_MODEL = "models/props_junk/watermelon01.mdl"
@@ -22,6 +23,7 @@ local GLOBAL_THROTTLE = 3
 local KEY_UNDO_CYCLE = IN_KEY.ALT1
 local KEY_FREEZE = IN_KEY.ALT2
 local KEY_TOGGLE_STYLE = IN_KEY.SPEED
+local KEY_VIEW_STEER = IN_KEY.ATTACK
 local KEY_DETACH = IN_KEY.WALK
 local KEY_POSSESS = IN_KEY.RELOAD
 local KEY_COPY_PROP = IN_KEY.ZOOM
@@ -55,6 +57,7 @@ if SERVER then
     local inPhysicsMode = false
     local isVehicleMode = false
     local isGlideMode = false
+    local isViewSteering = false
     local isPossessing = false
     local isDetached = false
     local isFrozen = false
@@ -116,6 +119,12 @@ if SERVER then
     --------------------------------------------------------------------------------
     -- UTILITY
     --------------------------------------------------------------------------------
+    
+    local function angleDiff(a, b)
+        local d = (a - b) % 360
+        if d > 180 then d = d - 360 end
+        return d
+    end
 
     local function applyVisualProperties(ent)
         if not isValid(ent) then
@@ -228,6 +237,7 @@ if SERVER then
         isFrozen = false
         isDetached = false
         isPossessing = false
+        isViewSteering = false
 
         cachedMass = 0
         cachedObbMaxZ = 0
@@ -424,21 +434,20 @@ if SERVER then
                 steering = steering - 1
             end
 
+            -- Ground trace now runs unconditionally each throttle cycle
+            traceTickCount = traceTickCount + 1
+            if traceTickCount >= GLOBAL_THROTTLE then
+                traceTickCount = 0
+                TRACE_END.x = worldCOM.x
+                TRACE_END.y = worldCOM.y
+                TRACE_END.z = worldCOM.z - (cachedObbMaxZ + 10)
+                local groundTrace = trace.line(worldCOM, TRACE_END, {ply, physProp})
+                lastGroundHit = groundTrace.Hit
+            end
+            
             if throttle ~= 0 or steering ~= 0 then
                 local propForward = physProp:getAngles():getForward()
                 local propUp = physProp:getAngles():getUp()
-
-                traceTickCount = traceTickCount + 1
-                if traceTickCount >= GLOBAL_THROTTLE then
-                    traceTickCount = 0
-                    TRACE_END.x = worldCOM.x
-                    TRACE_END.y = worldCOM.y
-                    TRACE_END.z = worldCOM.z - (cachedObbMaxZ + 10)
-
-                    local groundTrace = trace.line(worldCOM, TRACE_END, {ply, physProp})
-                    lastGroundHit = groundTrace.Hit
-                end
-
                 if lastGroundHit then
                     if throttle ~= 0 then
                         phys:applyForceOffset(propForward * throttle * cachedMass * VEHICLE_SPEED, worldCOM)
@@ -446,6 +455,22 @@ if SERVER then
                     if steering ~= 0 then
                         phys:applyTorque(propUp * steering * cachedMass * STEERING_SPEED)
                     end
+                end
+            end
+            
+            -- View-steering block
+            if isViewSteering then
+                local eyeAng  = ply:getEyeAngles()
+                local propAng = physProp:getAngles()
+                local propUp    = physProp:getAngles():getUp()
+                local propRight = physProp:getAngles():getRight()
+            
+                local yawDelta = angleDiff(eyeAng.y, propAng.y) / 180
+                phys:applyTorque(propUp * (yawDelta * cachedMass * VIEW_STEER_TORQUE))
+            
+                if not lastGroundHit then
+                    local pitchDelta = angleDiff(eyeAng.p, propAng.p) / 180
+                    phys:applyTorque(-propRight * (pitchDelta * cachedMass * VIEW_STEER_TORQUE))
                 end
             end
 
@@ -700,6 +725,11 @@ if SERVER then
                     end
                 end
             end
+            
+            if key == KEY_VIEW_STEER and inPhysicsMode and isVehicleMode and not isDetached then
+                isViewSteering = not isViewSteering
+                print("View Steering: " .. (isViewSteering and "ON" or "OFF"))
+            end
 
             if key == KEY_TOGGLE_STYLE and inPhysicsMode and not isDetached then
                 if isGlideMode and isValid(physProp) then
@@ -717,11 +747,13 @@ if SERVER then
                 elseif isVehicleMode and not isGlideMode then
                     isVehicleMode = false
                     isGlideMode = true
+                    isViewSteering = false
                     glideActivateTime = timer.curtime()
                     print("Style: GLIDE")
                 else
                     isVehicleMode = false
                     isGlideMode = false
+                    isViewSteering = false
                     print("Style: OMNI")
                 end
             end
