@@ -31,10 +31,13 @@ else
     local SPAWN_DELAY_MIN   = 60
     local SPAWN_DELAY_MAX   = 1800
     local SPAWN_RADIUS      = 1000
+    local DESPAWN_DISTANCE  = 1500 -- If the player gets further than this many units away, he vanishes
+    local GMAN_TTL          = 20   -- How many seconds he will wait to be spotted before getting "bored" and leaving
     local SPAWN_BEHIND_BIAS = 0.6
     local SPOT_ANGLE        = 65
     local VANISH_DELAY      = 0.1
-    local VANISH_DELAY_MAX  = 0.5
+    local VANISH_DELAY_MAX  = 0.3
+    local GAZE_DURATION     = 0.1
     local GMAN_MODEL        = "models/gman_high.mdl"
     local GMAN_SCALE        = Vector(1, 1, 1)
     local GMAN_MATERIAL     = "models/debug/debugwhite"
@@ -44,17 +47,13 @@ else
     local GMAN_SOUND_SPAWN     = "friends/friend_online.wav"
     local SOUND_VANISH_ENABLED = true
     local GMAN_SOUND_VANISH    = "ambient/levels/canals/windchime5.wav"
-    local GMAN_SOUND_LEVEL     = 75
+    local GMAN_SOUND_LEVEL     = 100
     local GMAN_SOUND_PITCH     = 100
     local GMAN_SOUND_VOLUME    = 1
 
+
     -- ============================================================
     --  CROWD BIAS CONFIG
-    --  Isolated players are targeted more; crowded players get longer waits.
-    --  CROWD_BIAS_RADIUS  : units around the player to count nearby players
-    --  CROWD_BIAS_STRENGTH: 0 = no effect, 1 = full effect
-    --                       At full strength, being alone can halve the delay
-    --                       and being in a full crowd can double it.
     -- ============================================================
     local CROWD_BIAS_ENABLED  = true
     local CROWD_BIAS_RADIUS   = 800
@@ -63,10 +62,12 @@ else
     -- ============================================================
     --  STATE
     -- ============================================================
-    local gman        = nil
-    local spotted     = false
-    local vanishTimer = nil
-    local spawnTimer  = nil
+    local gman         = nil
+    local spotted      = false
+    local vanishTimer  = nil
+    local spawnTimer   = nil
+    local spawnTime    = 0
+    local gmanGazeTime = 0
 
     -- ============================================================
     --  HELPERS
@@ -121,9 +122,6 @@ else
         sound.emitSound(snd, pos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
     end
 
-    -- Returns a delay multiplier based on how crowded the local player is.
-    -- crowdFraction 0 (alone)    multiplier < 1  shorter delay (more sightings)
-    -- crowdFraction 1 (crowded)  multiplier > 1  longer delay  (fewer sightings)
     local function getCrowdDelayMultiplier()
         if not CROWD_BIAS_ENABLED then return 1 end
     
@@ -175,8 +173,8 @@ else
         local baseDelay = math.random(SPAWN_DELAY_MIN, SPAWN_DELAY_MAX)
         local delay     = math.clamp(
             baseDelay * getCrowdDelayMultiplier(),
-            SPAWN_DELAY_MIN * 0.25,   -- floor: never faster than 25% of min
-            SPAWN_DELAY_MAX * 4       -- ceiling: never slower than 4 max
+            SPAWN_DELAY_MIN * 0.25,
+            SPAWN_DELAY_MAX * 4
         )
 
         spawnTimer = "gman_spawn_" .. tostring(math.random(100000))
@@ -204,7 +202,8 @@ else
         gman:setMaterial(GMAN_MATERIAL)
         gman:setColor(GMAN_COLOR)
 
-        spotted = false
+        spotted   = false
+        spawnTime = timer.curtime() -- Mark the exact time he spawned
 
         if SOUND_SPAWN_ENABLED then
             playGmanSound(GMAN_SOUND_SPAWN, pos)
@@ -220,30 +219,64 @@ else
         if not gmanAlive() then return end
         if spotted then return end
 
-        local ply     = player()
-        local eyes    = ply:getEyePos()
-        local aim     = ply:getAimVector()
-        local gmanPos = gman:getPos() + Vector(0, 0, 40)
-        local toGman  = (gmanPos - eyes):getNormalized()
+        local ply      = player()
+        local eyes     = ply:getEyePos()
+        local aim      = ply:getAimVector()
+        local gmanPos  = gman:getPos() + Vector(0, 0, 50) -- Target chest/head level
+        local toGman   = (gmanPos - eyes):getNormalized()
+        local distance = eyes:getDistance(gmanPos)
 
+        -- 1. DISTANCE DESPAWN CHECK
+        if distance > DESPAWN_DISTANCE then
+            removeGman(false)
+            return
+        end
+
+        -- 2. TIME-TO-LIVE (TTL) BOREDOM CHECK
+        if (timer.curtime() - spawnTime) > GMAN_TTL then
+            removeGman(false)
+            return
+        end
+
+        -- 3. STRICT LOOK-AT AND LINE OF SIGHT DETECTION
         local dot       = aim:dot(toGman)
         local angleDiff = math.deg(math.acos(math.clamp(dot, -1, 1)))
 
+        -- Is he within our tightened center-screen cone?
         if angleDiff < SPOT_ANGLE then
-            spotted     = true
-            vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
+            -- Verify there isn't a wall/prop blocking the actual sightline right now
+            local tr = trace.line(eyes, gmanPos, ply)
+            
+            if tr.HitPos:getDistance(gmanPos) < 40 then
+                -- Player is LOOKING at him. Start/continue counting processing time.
+                if gmanGazeTime == 0 then
+                    gmanGazeTime = timer.curtime()
+                end
 
-            local distance    = math.floor(eyes:getDistance(gmanPos))
-            local t           = math.clamp(distance / SPAWN_RADIUS, 0, 1)
-            local vanishDelay = VANISH_DELAY + (VANISH_DELAY_MAX - VANISH_DELAY) * t
+                -- Has the player stared long enough to register the sighting?
+                if (timer.curtime() - gmanGazeTime) >= GAZE_DURATION then
+                    spotted     = true
+                    vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
 
-            timer.simple(vanishDelay, function()
-                removeGman(true)
-            end)
+                    local currentDist = math.floor(distance)
+                    local t           = math.clamp(currentDist / SPAWN_RADIUS, 0, 1)
+                    local vanishDelay = VANISH_DELAY + (VANISH_DELAY_MAX - VANISH_DELAY) * t
 
-            net.start("gman_spawned_report")
-            net.writeUInt(distance, 16)
-            net.send()
+                    timer.simple(vanishDelay, function()
+                        removeGman(true)
+                    end)
+
+                    net.start("gman_spawned_report")
+                    net.writeUInt(currentDist, 16)
+                    net.send()
+                end
+            else
+                -- Looked toward him, but he's blocked by geometry
+                gmanGazeTime = 0
+            end
+        else
+            -- Player looked away or deselecting him
+            gmanGazeTime = 0
         end
     end)
 
