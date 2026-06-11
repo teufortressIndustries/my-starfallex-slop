@@ -15,7 +15,7 @@ Disguise yourself as any physical prop (ragdolls and some models not supported y
 | `Space` | Jump (Omni & Vehicle modes) / Fly Upward (Glide mode) |
 | `Ctrl` (Duck) | Fly Downward (Glide mode) |
 | `Z` (Zoom) | Copy the model, skin, material, and color of the prop you are looking at |
-| `ALT1` (Tap) | Toggle between Hologram (client) and Physical (server) modes |
+| `ALT1` (Tap) | Toggle between Hologram and Physical modes |
 | `ALT2` | Freeze or unfreeze your physical prop in place |
 | `Shift` (Sprint) | Cycle handling styles: **Omni** → **Vehicle** → **Glide** |
 | `Alt` (Walk) | Detach from your prop to roam freely, or reattach to sync back up |
@@ -60,7 +60,7 @@ A Medigun-style support script that locks onto teammates and dynamically spawns 
 
 ## [who_is_that.txt](https://github.com/teufortressIndustries/my-starfallex-slop/blob/main/who_is_that.txt)
 
-A cheap knockoff G-Man sightings mod. Periodically spawns a silent, black G-Man hologram somewhere in the world around you. If you look directly at him, he disappears.
+A cheap knockoff G-Man sightings mod. Periodically spawns a silent, black G-Man hologram somewhere in the world around you. If you look at him, he disappears.
 
 ### Features
 
@@ -70,7 +70,7 @@ A cheap knockoff G-Man sightings mod. Periodically spawns a silent, black G-Man 
 - **Distance-Scaled Vanish** — The further away G-Man spawns, the longer he lingers after being spotted before disappearing.
 - **Ambient Sound** — Plays a directional wind-chime sound cue from G-Man's direction on spawn.
 - **Server Reporting** — Sends a net message to the server logging which player spotted him and from how far away.
-- **Whitelist Support** — Optional SteamID64 whitelist to restrict sightings to specific players only.
+- **Whitelist Support** — Optional SteamID whitelist to restrict sightings to specific players only.
 
 ### Configuration (top of script)
 
