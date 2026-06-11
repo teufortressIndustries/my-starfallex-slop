@@ -43,7 +43,7 @@ else
     local GMAN_MATERIAL     = "models/debug/debugwhite"
     local GMAN_COLOR        = Color(0, 0, 0)
 
-    local SOUND_SPAWN_ENABLED  = true
+    local SOUND_SPAWN_ENABLED  = false
     local GMAN_SOUND_SPAWN     = "friends/friend_online.wav"
     local SOUND_VANISH_ENABLED = true
     local GMAN_SOUND_VANISH    = "ambient/levels/canals/windchime5.wav"
