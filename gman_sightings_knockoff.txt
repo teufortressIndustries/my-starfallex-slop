@@ -16,7 +16,7 @@ if SERVER then
 else
     -- ============================================================
     --  CLIENT WHITELIST
-    --  Add SteamID64s of players who should see G-Man.
+    --  Add SteamIDs of players who should see G-Man.
     -- ============================================================
     local WHITELIST_ON = false
 
