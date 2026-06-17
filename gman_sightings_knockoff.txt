@@ -1,7 +1,7 @@
 --@name Who is that?
 --@author John Doe
 --@shared
---@description A cheap knockoff G-Man sightings mod.
+-- interloper type stuff
 
 if SERVER then
     -- ============================================================
@@ -9,7 +9,9 @@ if SERVER then
     -- ============================================================
     net.receive("gman_spawned_report", function(len, ply)
         local distance = net.readUInt(16)
-        print(string.format("[G-Man Sightings] %s SPOTTED G-Man from %d units away!", ply:getName(), distance))
+        local reactionType = net.readUInt(4)
+        local reactions = {"Vanish", "Flicker Jumpscare"}
+        print(string.format("[G-Man] %s spotted G-Man (%s) from %d units away!", ply:getName(), reactions[reactionType] or "Unknown", distance))
     end)
 
 else
@@ -30,13 +32,13 @@ else
     -- ============================================================
     local SPAWN_DELAY_MIN   = 60
     local SPAWN_DELAY_MAX   = 1800
-    local SPAWN_RADIUS      = 1000
-    local DESPAWN_DISTANCE  = 1500 -- If the player gets further than this many units away, he vanishes
-    local GMAN_TTL          = 20   -- How many seconds he will wait to be spotted before getting "bored" and leaving
-    local SPAWN_BEHIND_BIAS = 0.6
-    local SPOT_ANGLE        = 65
+    local SPAWN_RADIUS      = 1200
+    local DESPAWN_DISTANCE  = 1600 
+    local GMAN_TTL          = 15
+    local SPAWN_BEHIND_BIAS = 0.55
+    local SPOT_ANGLE        = 50
     local VANISH_DELAY      = 0.1
-    local VANISH_DELAY_MAX  = 0.3
+    local VANISH_DELAY_MAX  = 0.4
     local GAZE_DURATION     = 0.1
     local GMAN_MODEL        = "models/gman_high.mdl"
     local GMAN_SCALE        = Vector(1, 1, 1)
@@ -45,12 +47,11 @@ else
 
     local SOUND_SPAWN_ENABLED  = false
     local GMAN_SOUND_SPAWN     = "friends/friend_online.wav"
-    local SOUND_VANISH_ENABLED = true
     local GMAN_SOUND_VANISH    = "ambient/levels/canals/windchime5.wav"
+    local GMAN_SOUND_SCREAM    = "ambient/creatures/town_child_scream1.wav"
     local GMAN_SOUND_LEVEL     = 100
-    local GMAN_SOUND_PITCH     = 100
+    local GMAN_SOUND_PITCH     = 85
     local GMAN_SOUND_VOLUME    = 1
-
 
     -- ============================================================
     --  CROWD BIAS CONFIG
@@ -64,8 +65,10 @@ else
     -- ============================================================
     local gman         = nil
     local spotted      = false
+    local isJumpscaring = false
     local vanishTimer  = nil
     local spawnTimer   = nil
+    local reactionHook = nil
     local spawnTime    = 0
     local gmanGazeTime = 0
 
@@ -103,7 +106,7 @@ else
             behind:normalize()
             dir = (dir * (1 - SPAWN_BEHIND_BIAS) + behind * SPAWN_BEHIND_BIAS):getNormalized()
 
-            local dist   = math.random(150, SPAWN_RADIUS)
+            local dist   = math.random(250, SPAWN_RADIUS)
             local tryPos = plyPos + dir * dist + Vector(0, 0, 100)
 
             local floorTr = trace.line(tryPos, tryPos - Vector(0, 0, 300), ply)
@@ -118,36 +121,29 @@ else
         return nil
     end
 
-    local function playGmanSound(snd, pos)
-        sound.emitSound(snd, pos, GMAN_SOUND_LEVEL, GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
+    local function playGmanSound(snd, pos, pitch)
+        sound.emitSound(snd, pos, GMAN_SOUND_LEVEL, pitch or GMAN_SOUND_PITCH, GMAN_SOUND_VOLUME)
     end
 
     local function getCrowdDelayMultiplier()
         if not CROWD_BIAS_ENABLED then return 1 end
-    
         local plyPos  = player():getPos()
         local allPlys = find.allPlayers()
         local others  = #allPlys - 1
-    
-        if others <= 0 then
-            return math.max(0.1, 1 - CROWD_BIAS_STRENGTH * 0.5)
-        end
-    
+        if others <= 0 then return math.max(0.1, 1 - CROWD_BIAS_STRENGTH * 0.5) end
         local nearby = 0
         for _, p in ipairs(allPlys) do
             if p ~= player() and p:getPos():getDistance(plyPos) < CROWD_BIAS_RADIUS then
                 nearby = nearby + 1
             end
         end
-    
         local crowdFraction = nearby / others
-    
         local mult = 1 + CROWD_BIAS_STRENGTH * (crowdFraction * 1.5 - 0.5)
         return math.max(0.1, mult)
     end
 
     -- ============================================================
-    --  CORE LOGIC
+    --  CORE LOGIC & CLEANUP
     -- ============================================================
 
     local function gmanAlive()
@@ -155,14 +151,20 @@ else
     end
 
     local function removeGman(playVanishSound)
-        if playVanishSound and SOUND_VANISH_ENABLED then
+        if playVanishSound then
             local pos = gmanAlive() and gman:getPos() or player():getPos()
             playGmanSound(GMAN_SOUND_VANISH, pos)
         end
 
+        if reactionHook then
+            hook.remove("think", reactionHook)
+            reactionHook = nil
+        end
+
         if gmanAlive() then gman:remove() end
-        gman    = nil
-        spotted = false
+        gman          = nil
+        spotted       = false
+        isJumpscaring = false
         if vanishTimer then
             timer.remove(vanishTimer)
             vanishTimer = nil
@@ -171,19 +173,39 @@ else
 
     local function scheduleNextSighting()
         local baseDelay = math.random(SPAWN_DELAY_MIN, SPAWN_DELAY_MAX)
-        local delay     = math.clamp(
-            baseDelay * getCrowdDelayMultiplier(),
-            SPAWN_DELAY_MIN * 0.25,
-            SPAWN_DELAY_MAX * 4
-        )
+        local delay     = math.clamp(baseDelay * getCrowdDelayMultiplier(), SPAWN_DELAY_MIN * 0.25, SPAWN_DELAY_MAX * 4)
 
         spawnTimer = "gman_spawn_" .. tostring(math.random(100000))
         timer.simple(delay, function()
-            if not gmanAlive() then
-                spawnGman()
-            else
-                scheduleNextSighting()
-            end
+            if not gmanAlive() then spawnGman() else scheduleNextSighting() end
+        end)
+    end
+
+    -- ============================================================
+    --  REACTION VARIATIONS (THE SCARE FACTOR)
+    -- ============================================================
+    
+    local function triggerVanishReaction(distance)
+        local currentDist = math.floor(distance)
+        local t           = math.clamp(currentDist / SPAWN_RADIUS, 0, 1)
+        local vanishDelay = VANISH_DELAY + (VANISH_DELAY_MAX - VANISH_DELAY) * t
+
+        timer.simple(vanishDelay, function()
+            removeGman(true)
+        end)
+    end
+
+    local function triggerJumpscareReaction()
+        isJumpscaring = true
+        
+        local ply = player()
+        local initialStrikePos = ply:getEyePos() + ply:getAimVector() * 70 - Vector(0,0,45)
+        
+        gman:setPos(initialStrikePos)
+        playGmanSound(GMAN_SOUND_SCREAM, initialStrikePos, 60)
+        
+        timer.simple(0.25, function()
+            removeGman(false)
         end)
     end
 
@@ -202,8 +224,9 @@ else
         gman:setMaterial(GMAN_MATERIAL)
         gman:setColor(GMAN_COLOR)
 
-        spotted   = false
-        spawnTime = timer.curtime() -- Mark the exact time he spawned
+        spotted       = false
+        isJumpscaring = false
+        spawnTime     = timer.curtime()
 
         if SOUND_SPAWN_ENABLED then
             playGmanSound(GMAN_SOUND_SPAWN, pos)
@@ -213,69 +236,81 @@ else
     end
 
     -- ============================================================
-    --  THINK HOOK
+    --  THINK HOOK (LOOK-AT TRACKING + VISION CHECK)
     -- ============================================================
     hook.add("think", "gman_vision_check", function()
         if not gmanAlive() then return end
-        if spotted then return end
 
         local ply      = player()
         local eyes     = ply:getEyePos()
         local aim      = ply:getAimVector()
-        local gmanPos  = gman:getPos() + Vector(0, 0, 50) -- Target chest/head level
-        local toGman   = (gmanPos - eyes):getNormalized()
+        local gmanPos  = gman:getPos()
         local distance = eyes:getDistance(gmanPos)
 
-        -- 1. DISTANCE DESPAWN CHECK
+        if not spotted or isJumpscaring then
+            if isJumpscaring then
+                local jumpPos = eyes + aim * 20 - Vector(0, 0, 65)
+                gman:setPos(jumpPos)
+                
+                local toPlayerAngle = (eyes - jumpPos):getAngle()
+                gman:setAngles(Angle(0, toPlayerAngle.y, 0))
+            else
+                local toPlayerAngle = (eyes - gmanPos):getAngle()
+                gman:setAngles(Angle(0, toPlayerAngle.y, 0))
+            end
+        end
+
+        if spotted then return end
+
         if distance > DESPAWN_DISTANCE then
             removeGman(false)
             return
         end
 
-        -- 2. TIME-TO-LIVE (TTL) BOREDOM CHECK
         if (timer.curtime() - spawnTime) > GMAN_TTL then
             removeGman(false)
             return
         end
 
-        -- 3. STRICT LOOK-AT AND LINE OF SIGHT DETECTION
-        local dot       = aim:dot(toGman)
-        local angleDiff = math.deg(math.acos(math.clamp(dot, -1, 1)))
+        local gmanTargetPos = gmanPos + Vector(0, 0, 55)
+        local toGman        = (gmanTargetPos - eyes):getNormalized()
+        local dot           = aim:dot(toGman)
+        local angleDiff     = math.deg(math.acos(math.clamp(dot, -1, 1)))
 
-        -- Is he within our tightened center-screen cone?
         if angleDiff < SPOT_ANGLE then
-            -- Verify there isn't a wall/prop blocking the actual sightline right now
-            local tr = trace.line(eyes, gmanPos, ply)
+            local tr = trace.line(eyes, gmanTargetPos, ply)
             
-            if tr.HitPos:getDistance(gmanPos) < 40 then
-                -- Player is LOOKING at him. Start/continue counting processing time.
+            if tr.HitPos:getDistance(gmanTargetPos) < 45 then
                 if gmanGazeTime == 0 then
                     gmanGazeTime = timer.curtime()
                 end
 
-                -- Has the player stared long enough to register the sighting?
                 if (timer.curtime() - gmanGazeTime) >= GAZE_DURATION then
-                    spotted     = true
-                    vanishTimer = "gman_vanish_" .. tostring(math.random(100000))
-
-                    local currentDist = math.floor(distance)
-                    local t           = math.clamp(currentDist / SPAWN_RADIUS, 0, 1)
-                    local vanishDelay = VANISH_DELAY + (VANISH_DELAY_MAX - VANISH_DELAY) * t
-
-                    timer.simple(vanishDelay, function()
-                        removeGman(true)
-                    end)
-
+                    spotted = true
+                    
+                    local reactionPool = math.random(1, 2)
+                    
+                    if reactionPool == 1 then
+                        triggerVanishReaction(distance)
+                    else
+                        local roll = math.random(1, 10)
+                        if distance < 600 and roll > 4 then
+                            triggerJumpscareReaction()
+                        else
+                            reactionPool = 1
+                            triggerVanishReaction(distance)
+                        end
+                    end
+                
                     net.start("gman_spawned_report")
-                    net.writeUInt(currentDist, 16)
+                    net.writeUInt(math.floor(distance), 16)
+                    net.writeUInt(reactionPool, 4)
                     net.send()
                 end
             else
-                -- Looked toward him, but he's blocked by geometry
                 gmanGazeTime = 0
             end
         else
-            -- Player looked away or deselecting him
             gmanGazeTime = 0
         end
     end)
@@ -283,7 +318,7 @@ else
     -- ============================================================
     --  BOOT
     -- ============================================================
-    timer.simple(5, function()
+    timer.simple(1, function()
         scheduleNextSighting()
     end)
 
